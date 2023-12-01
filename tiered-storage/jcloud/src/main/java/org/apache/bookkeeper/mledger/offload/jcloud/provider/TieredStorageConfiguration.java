@@ -21,6 +21,7 @@ package org.apache.bookkeeper.mledger.offload.jcloud.provider;
 import static org.apache.bookkeeper.mledger.offload.jcloud.provider.JCloudBlobStoreProvider.AWS_S3;
 import static org.apache.bookkeeper.mledger.offload.jcloud.provider.JCloudBlobStoreProvider.GOOGLE_CLOUD_STORAGE;
 
+import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableMap;
 
 import java.io.IOException;
@@ -35,7 +36,6 @@ import java.util.stream.Collectors;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.pulsar.jcloud.shade.com.google.common.base.Supplier;
 import org.jclouds.Constants;
 import org.jclouds.aws.s3.AWSS3ProviderMetadata;
 import org.jclouds.blobstore.BlobStore;

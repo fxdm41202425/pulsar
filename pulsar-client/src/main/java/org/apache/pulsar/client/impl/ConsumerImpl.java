@@ -400,8 +400,13 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
     protected Message<T> internalReceive() throws PulsarClientException {
         Message<T> message;
         try {
+            //消息队列阻塞调用，等待消息到来
             message = incomingMessages.take();
+
+            //处理消息
             messageProcessed(message);
+
+            //调用消息拦截器
             return beforeConsume(message);
         } catch (InterruptedException e) {
             stats.incrementNumReceiveFailed();
@@ -495,9 +500,11 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
     boolean markAckForBatchMessage(BatchMessageIdImpl batchMessageId, AckType ackType,
                                    Map<String,Long> properties, TransactionImpl txn) {
         boolean isAllMsgsAcked;
+        //单个确认
         if (ackType == AckType.Individual) {
             isAllMsgsAcked = txn == null && batchMessageId.ackIndividual();
         } else {
+            // 累计确认
             isAllMsgsAcked = batchMessageId.ackCumulative();
         }
         int outstandingAcks = 0;
@@ -507,18 +514,27 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
         int batchSize = batchMessageId.getBatchSize();
         // all messages in this batch have been acked
+        // 批量容器里所有消息是否已经全部确认
         if (isAllMsgsAcked) {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] [{}] can ack message to broker {}, acktype {}, cardinality {}, length {}", subscription,
                         consumerName, batchMessageId, ackType, outstandingAcks, batchSize);
             }
+            //如果是的，返回true
             return true;
         } else {
+            //如果确认类型为累计确认，且前一个批量累计确认还没有完成
             if (AckType.Cumulative == ackType
                 && !batchMessageId.getAcker().isPrevBatchCumulativelyAcked()) {
+
+                //把前一个批量消息给累计确认了
                 sendAcknowledge(batchMessageId.prevBatchMessageId(), AckType.Cumulative, properties, null);
+
+                //确认完后，设置前一个批量消息已确认
                 batchMessageId.getAcker().setPrevBatchCumulativelyAcked(true);
             } else {
+
+                //前一个批量累计已确认，立即执行当前批量消息确认
                 onAcknowledge(batchMessageId, null);
             }
             if (log.isDebugEnabled()) {
@@ -727,40 +743,53 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
     }
 
     // TODO: handle transactional acknowledgements.
+    //发送确认消息
     private CompletableFuture<Void> sendAcknowledge(MessageId messageId, AckType ackType,
                                                     Map<String,Long> properties,
                                                     TransactionImpl txnImpl) {
         MessageIdImpl msgId = (MessageIdImpl) messageId;
 
+        // 如果确认类型为单个确认
         if (ackType == AckType.Individual) {
             if (messageId instanceof BatchMessageIdImpl) {
                 BatchMessageIdImpl batchMessageId = (BatchMessageIdImpl) messageId;
 
                 stats.incrementNumAcksSent(batchMessageId.getBatchSize());
+
+                //移除未确认跟踪器中对应的消息
                 unAckedMessageTracker.remove(new MessageIdImpl(batchMessageId.getLedgerId(),
                         batchMessageId.getEntryId(), batchMessageId.getPartitionIndex()));
+
+                //移除死信队列容器中对应的消息
                 if (possibleSendToDeadLetterTopicMessages != null) {
                     possibleSendToDeadLetterTopicMessages.remove(new MessageIdImpl(batchMessageId.getLedgerId(),
                             batchMessageId.getEntryId(), batchMessageId.getPartitionIndex()));
                 }
             } else {
                 // increment counter by 1 for non-batch msg
+                //单个消息处理，同上
                 unAckedMessageTracker.remove(msgId);
                 if (possibleSendToDeadLetterTopicMessages != null) {
                     possibleSendToDeadLetterTopicMessages.remove(msgId);
                 }
                 stats.incrementNumAcksSent(1);
             }
+
+            //执行单个消息确认拦截器
             onAcknowledge(messageId, null);
         } else if (ackType == AckType.Cumulative) {
+
+            //执行累积消息确认拦截器
             onAcknowledgeCumulative(messageId, null);
             stats.incrementNumAcksSent(unAckedMessageTracker.removeMessagesTill(msgId));
         }
 
+        //把未确认的放入确认组提交跟踪器（这个接口实现的持久化确认，会发送确认消息到 broker）
         acknowledgmentsGroupingTracker.addAcknowledgment(msgId, ackType, properties, txnImpl);
 
         // Consumer acknowledgment operation immediately succeeds. In any case, if we're not able to send ack to broker,
         // the messages will be re-delivered
+        //消费者确认操作将会立即成功，在任何情况，如果没有发送确认消息到 broker （也有网络原因），这个消息将被重新投递
         return CompletableFuture.completedFuture(null);
     }
 
@@ -937,6 +966,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         });
     }
 
+    ////重连完成，设置可用许可为0
     protected void consumerIsReconnectedToBroker(ClientCnx cnx, int currentQueueSize) {
         log.info("[{}][{}] Subscribed to topic on {} -- consumer: {}", topic, subscription,
                 cnx.channel().remoteAddress(), consumerId);
@@ -947,6 +977,10 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
     /**
      * Clear the internal receiver queue and returns the message id of what was the 1st message in the queue that was
      * not seen by the application
+     */
+
+    /**
+     *清除内部接收队列并返回队列中第一条消息的消息ID，该消息是应用尚未看到（处理）的
      */
     private BatchMessageIdImpl clearReceiverQueue() {
         List<Message<?>> currentMessageQueue = new ArrayList<>(incomingMessages.size());
@@ -1126,10 +1160,13 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             return;
         }
 
+
+        //尝试解析消息
         MessageMetadata msgMetadata;
         try {
             msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
         } catch (Throwable t) {
+            //解析异常，则丢弃这个消息，并通知 broker 重发
             discardCorruptedMessage(messageId, cnx, ValidationError.ChecksumMismatch);
             return;
         }
@@ -1138,6 +1175,8 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         final boolean isChunkedMessage = msgMetadata.getNumChunksFromMsg() > 1 && conf.getSubscriptionType() != SubscriptionType.Shared;
 
         MessageIdImpl msgId = new MessageIdImpl(messageId.getLedgerId(), messageId.getEntryId(), getPartitionIndex());
+
+        //检查此消息是否已确认，如果已确认，则忽略（丢弃）
         if (acknowledgmentsGroupingTracker.isDuplicate(msgId)) {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] [{}] Ignoring message as it was already being acked earlier by same consumer {}/{}",
@@ -1148,15 +1187,19 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             return;
         }
 
+        // 如果需要，解密消息
         ByteBuf decryptedPayload = decryptPayloadIfNeeded(messageId, msgMetadata, headersAndPayload, cnx);
 
+        //消息是否已解密
         boolean isMessageUndecryptable = isMessageUndecryptable(msgMetadata);
 
+        //消息已丢弃或 CryptoKeyReader 接口没有实现
         if (decryptedPayload == null) {
             // Message was discarded or CryptoKeyReader isn't implemented
             return;
         }
 
+        // 解压已解密的消息，并且释放已解密的字节缓存
         // uncompress decryptedPayload and release decryptedPayload-ByteBuf
         ByteBuf uncompressedPayload = (isMessageUndecryptable || isChunkedMessage) ? decryptedPayload.retain()
                 : uncompressPayloadIfNeeded(messageId, msgMetadata, decryptedPayload, cnx, true);
@@ -1168,6 +1211,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
         // if message is not decryptable then it can't be parsed as a batch-message. so, add EncyrptionCtx to message
         // and return undecrypted payload
+        // 如果消息没有解密，它不能解析成一个批量消息，故增加加密上下文到消息，返回未加密的消息体
         if (isMessageUndecryptable || (numMessages == 1 && !msgMetadata.hasNumMessagesInBatch())) {
 
             // right now, chunked messages are only supported by non-shared subscription
@@ -1199,6 +1243,13 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             // Enqueue the message so that it can be retrieved when application calls receive()
             // if the conf.getReceiverQueueSize() is 0 then discard message if no one is waiting for it.
             // if asyncReceive is waiting then notify callback without adding to incomingMessages queue
+            // 消息入本地队列，当应用调用 receive() 方法时可以获取它。
+            // 如果参数ReceiverQueueSize设置为0，那么如果没有人等待（消息到来），消息将丢弃
+            // 如果调用asyncReceive方法等待，这将通知回调，不会把消息放入到本地队列
+
+            //如果死信消息策略不为空，可能发送消息给死信 Topic 对应的容器不为空，
+            // 且当前投递次数已经大于等于死信消息策略设置的最大投递次数，则把消息放入死信容器，
+            // 等待发给死信对应的死信 Topic，接下来有小节会有详细分析死信消息的处理。
             internalPinnedExecutor.execute(() -> {
                 if (deadLetterPolicy != null && possibleSendToDeadLetterTopicMessages != null &&
                         redeliveryCount >= deadLetterPolicy.getMaxRedeliverCount()) {
@@ -1215,11 +1266,14 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             });
         } else {
             // handle batch message enqueuing; uncompressed payload has all messages in batch
+            // 处理批量消息入队列，批处理解压缩所有的消息
             receiveIndividualMessagesFromBatch(msgMetadata, redeliveryCount, ackSet, uncompressedPayload, messageId, cnx);
 
             uncompressedPayload.release();
             msgMetadata.recycle();
         }
+
+        //如果监听器被设置，则触发，注意，这里意味着拦截器先触发，监听器后触发
         internalPinnedExecutor.execute(()
                 -> tryTriggerListener());
 
@@ -1328,6 +1382,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         }
 
         // fetch receivedCallback from queue
+        //拉取一个等待任务
         final CompletableFuture<Message<T>> receivedFuture = nextPendingReceive();
         if (receivedFuture == null) {
             return;
@@ -1344,6 +1399,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             return;
         }
 
+        //如果队列大小设置为0，将立即调用拦截器和完成接收回调
         if (conf.getReceiverQueueSize() == 0) {
             // call interceptor and complete received callback
             trackMessage(message);
@@ -1352,6 +1408,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         }
 
         // increase permits for available message-queue
+        // 记录应用处理了一条消息的事件。并尝试发送一个 Flow 命令通知 broker 可以推送消息了
         messageProcessed(message);
         // call interceptor and complete received callback
         interceptAndComplete(message, receivedFuture);
@@ -1359,8 +1416,11 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
     private void interceptAndComplete(final Message<T> message, final CompletableFuture<Message<T>> receivedFuture) {
         // call proper interceptor
+        // 调用拦截器
         final Message<T> interceptMessage = beforeConsume(message);
+
         // return message to receivedCallback
+        //设置完成标志
         completePendingReceive(receivedFuture, interceptMessage);
     }
 
@@ -1489,12 +1549,16 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         ClientCnx msgCnx = ((MessageImpl<?>) msg).getCnx();
         lastDequeuedMessageId = msg.getMessageId();
 
+        //当前消息属于老队列中的，重连后将被清除。
         if (msgCnx != currentCnx) {
             // The processed message did belong to the old queue that was cleared after reconnection.
         } else {
+
+            //增加可用许可
             increaseAvailablePermits(currentCnx);
             stats.updateNumMsgsReceived(msg);
 
+            //把消息放入跟踪未确认消息记录器
             trackMessage(msg);
         }
         decreaseIncomingMessageSize(msg);
@@ -1532,6 +1596,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
         while (available >= receiverQueueRefillThreshold && !paused) {
             if (AVAILABLE_PERMITS_UPDATER.compareAndSet(this, available, 0)) {
+                ////发送流控命令到 broker
                 sendFlowPermitsToBroker(currentCnx, available);
                 break;
             } else {

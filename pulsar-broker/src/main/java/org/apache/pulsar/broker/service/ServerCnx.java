@@ -139,6 +139,9 @@ import org.apache.pulsar.transaction.coordinator.impl.MLTransactionMetadataStore
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * broker端只要服务入口
+ */
 public class ServerCnx extends PulsarHandler implements TransportCnx {
     private final BrokerService service;
     private final SchemaRegistryService schemaService;
@@ -346,12 +349,20 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
 
         TopicName topicName = validateTopicName(lookup.getTopic(), requestId, lookup);
+        // 如果没有找到对应的 topic 信息，直接返回，客户端那边会超时
         if (topicName == null) {
             return;
         }
 
+        // 获取 Lookup 命令信号量，用于控制并发数
         final Semaphore lookupSemaphore = service.getLookupRequestSemaphore();
+
+        // 尝试请求
         if (lookupSemaphore.tryAcquire()) {
+
+            // 当连接 broker 时，如果认证与授权被启用时，且如果认证角色（authRole）是代理角色（proxyRoles）之一时，必须强制遵循如下规则
+            // * originalPrincipal 不能为空
+            // * originalPrincipal 不能是以 proxy 身份
             if (invalidOriginalPrincipal(originalPrincipal)) {
                 final String msg = "Valid Proxy Client role should be provided for lookup ";
                 log.warn("[{}] {} with role {} and proxyClientAuthRole {} on topic {}", remoteAddress, msg, authRole,
@@ -410,13 +421,19 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                     remoteAddress, requestId);
         }
 
+        // 校验 Topic 合法性
         TopicName topicName = validateTopicName(partitionMetadata.getTopic(), requestId, partitionMetadata);
         if (topicName == null) {
             return;
         }
 
+        // 获取 Lookup 命令信号量，用于控制并发数
         final Semaphore lookupSemaphore = service.getLookupRequestSemaphore();
         if (lookupSemaphore.tryAcquire()) {
+
+            // 当连接 broker 时，如果认证与授权被启用时，且如果认证角色（authRole）是代理角色（proxyRoles）之一时，必须强制遵循如下规则
+            // * originalPrincipal 不能为空
+            // * originalPrincipal 不能是以 proxy 身份（意味着不能多重代理）
             if (invalidOriginalPrincipal(originalPrincipal)) {
                 final String msg = "Valid Proxy Client role should be provided for getPartitionMetadataRequest ";
                 log.warn("[{}] {} with role {} and proxyClientAuthRole {} on topic {}", remoteAddress, msg, authRole,
@@ -799,6 +816,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         checkArgument(state == State.Connected);
         final long requestId = subscribe.getRequestId();
         final long consumerId = subscribe.getConsumerId();
+        // 校验 Topic 合法性
         TopicName topicName = validateTopicName(subscribe.getTopic(), requestId, subscribe);
         if (topicName == null) {
             return;
@@ -809,6 +827,10 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                 remoteAddress, authRole, originalPrincipal);
         }
 
+        // 当连接 broker 时，如果认证与授权被启用时，且如果认证角色（authRole）是代理角色（proxyRoles）之一时，必须强制遵循如下规则
+        // * originalPrincipal 不能为空
+        // * originalPrincipal 不能是以 proxy 身份
+        // 这里跟生产者一致
         if (invalidOriginalPrincipal(originalPrincipal)) {
             final String msg = "Valid Proxy Client role should be provided while subscribing ";
             log.warn("[{}] {} with role {} and proxyClientAuthRole {} on topic {}", remoteAddress, msg, authRole,
@@ -1225,6 +1247,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             }
         }
 
+        // 开始发送操作：正处理发送请求是否已经达到最大发送限制，如果达到，则暂时禁用自动读设置
         startSendOperation(producer, headersAndPayload.readableBytes(), send.getNumMessages());
 
         if (send.hasTxnidMostBits() && send.hasTxnidLeastBits()) {
@@ -1235,6 +1258,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
 
         // Persist the message
+        //保存消息
         if (send.hasHighestSequenceId() && send.getSequenceId() <= send.getHighestSequenceId()) {
             producer.publishMessage(send.getProducerId(), send.getSequenceId(), send.getHighestSequenceId(),
                     headersAndPayload, send.getNumMessages(), send.getIsChunk());
@@ -1414,6 +1438,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         final long producerId = closeProducer.getProducerId();
         final long requestId = closeProducer.getRequestId();
 
+        // 未找到相关生产者信息，未知错误
         CompletableFuture<Producer> producerFuture = producers.get(producerId);
         if (producerFuture == null) {
             log.info("[{}] Producer {} was not registered on the connection", remoteAddress, producerId);
@@ -1421,16 +1446,20 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             return;
         }
 
+        // 在创建之前关闭生产者
         if (!producerFuture.isDone() && producerFuture
                 .completeExceptionally(new IllegalStateException("Closed producer before creation was complete"))) {
             // We have received a request to close the producer before it was actually completed, we have marked the
             // producer future as failed and we can tell the client the close operation was successful.
+            //收到了在生产者（创建）实际完成之前关闭生产者的请求，已将生产者标记为失败，
+            //可以告诉客户关闭操作成功。 当实际的创建操作完成时，新生产者将被丢弃。
             log.info("[{}] Closed producer before its creation was completed. producerId={}",
                      remoteAddress, producerId);
             commandSender.sendSuccessResponse(requestId);
             producers.remove(producerId, producerFuture);
             return;
         } else if (producerFuture.isCompletedExceptionally()) {
+            // 生产者本身没有创建成功，但是可以认为关闭成功
             log.info("[{}] Closed producer that already failed to be created. producerId={}",
                      remoteAddress, producerId);
             commandSender.sendSuccessResponse(requestId);
@@ -1439,6 +1468,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
 
         // Proceed with normal close, the producer
+        // 正常关闭生产者
         Producer producer = producerFuture.getNow(null);
         log.info("[{}][{}] Closing producer on cnx {}. producerId={}",
                  producer.getTopic(), producer.getProducerName(), remoteAddress, producerId);
@@ -1748,11 +1778,16 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
 
         long requestId = commandGetSchema.getRequestId();
+
+        // 默认空 SchemaVersion
         SchemaVersion schemaVersion = SchemaVersion.Latest;
+
+        // 如果请求命令有 SchemaVersion 版本设置
         if (commandGetSchema.hasSchemaVersion()) {
             schemaVersion = schemaService.versionFromBytes(commandGetSchema.getSchemaVersion().toByteArray());
         }
 
+        // Schema 名，从 Topic 信息中获取
         String schemaName;
         try {
             schemaName = TopicName.get(commandGetSchema.getTopic()).getSchemaName();
@@ -1761,7 +1796,10 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             return;
         }
 
+        // 从 bookkeeper 中读取 Schema 信息
         schemaService.getSchema(schemaName, schemaVersion).thenAccept(schemaAndMetadata -> {
+
+            // Schanme 元数据为空，则回复客户端异常
             if (schemaAndMetadata == null) {
                 commandSender.sendGetSchemaErrorResponse(requestId, ServerError.TopicNotFound,
                         "Topic not found or no-schema");

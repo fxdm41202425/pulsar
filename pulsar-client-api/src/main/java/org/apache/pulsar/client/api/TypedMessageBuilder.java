@@ -56,6 +56,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      *
      * @return the {@link MessageId} assigned by the broker to the published message.
      */
+    //同步发送消息，并返回消息ID信息
     MessageId send() throws PulsarClientException;
 
     /**
@@ -85,6 +86,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      *
      * @return a future that can be used to track when the message will have been safely persisted
      */
+    //异步发送
     CompletableFuture<MessageId> sendAsync();
 
     /**
@@ -93,6 +95,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      * @param key the partitioning key for the message
      * @return the message builder instance
      */
+    //设置消息路由Key
     TypedMessageBuilder<T> key(String key);
 
     /**
@@ -102,6 +105,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      * @param key routing key for message, in byte array form
      * @return the message builder instance
      */
+    //设置消息（体）
     TypedMessageBuilder<T> keyBytes(byte[] key);
 
     /**
@@ -131,6 +135,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      *            the associated value
      * @return the message builder instance
      */
+    //给消息增加一个属性
     TypedMessageBuilder<T> property(String name, String value);
 
     /**
@@ -148,6 +153,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      * can't seek the messages by event time.
      * @return the message builder instance
      */
+    //设置事件时间
     TypedMessageBuilder<T> eventTime(long timestamp);
 
     /**
@@ -166,6 +172,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      *            the sequence id to assign to the current message
      * @return the message builder instance
      */
+    //设置唯一序号（主要用于去重）
     TypedMessageBuilder<T> sequenceId(long sequenceId);
 
     /**
@@ -174,6 +181,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      * @param clusters the list of clusters.
      * @return the message builder instance
      */
+    //设置（覆盖）全局集群列表（geo-replication clusters）
     TypedMessageBuilder<T> replicationClusters(List<String> clusters);
 
     /**
@@ -181,6 +189,7 @@ public interface TypedMessageBuilder<T> extends Serializable {
      *
      * @return the message builder instance
      */
+    //禁用集群（geo-replication clusters
     TypedMessageBuilder<T> disableReplication();
 
     /**

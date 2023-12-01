@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import sun.management.HotspotRuntimeMBean;
+import sun.management.ManagementFactoryHelper;
 
 @SuppressWarnings({"restriction", "checkstyle:JavadocType"})
 public class JvmDefaultGCMetricsLogger implements JvmGCMetricsLogger {
@@ -37,13 +39,13 @@ public class JvmDefaultGCMetricsLogger implements JvmGCMetricsLogger {
     private volatile long currentFullGcTime = 0;
 
     @SuppressWarnings("restriction")
-    private static sun.management.HotspotRuntimeMBean runtime;
+    private static HotspotRuntimeMBean runtime;
 
     private Map<String, GCMetrics> gcMetricsMap = Maps.newHashMap();
 
     static {
         try {
-            runtime = sun.management.ManagementFactoryHelper.getHotspotRuntimeMBean();
+            runtime = ManagementFactoryHelper.getHotspotRuntimeMBean();
         } catch (Exception e) {
             log.warn("Failed to get Runtime bean", e);
         }

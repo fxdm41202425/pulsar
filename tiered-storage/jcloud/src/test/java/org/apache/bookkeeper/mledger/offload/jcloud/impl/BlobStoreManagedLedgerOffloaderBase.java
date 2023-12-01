@@ -18,40 +18,31 @@
  */
 package org.apache.bookkeeper.mledger.offload.jcloud.impl;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
+import com.google.common.base.Supplier;
+import com.google.common.util.concurrent.MoreExecutors;
+import org.apache.bookkeeper.client.BookKeeper;
+import org.apache.bookkeeper.client.LedgerHandle;
+import org.apache.bookkeeper.client.PulsarMockBookKeeper;
+import org.apache.bookkeeper.client.api.DigestType;
+import org.apache.bookkeeper.client.api.ReadHandle;
+import org.apache.bookkeeper.common.util.OrderedScheduler;
+import org.apache.bookkeeper.mledger.offload.jcloud.provider.JCloudBlobStoreProvider;
+import org.apache.bookkeeper.mledger.offload.jcloud.provider.TieredStorageConfiguration;
+import org.apache.bookkeeper.util.ZkUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.MockZooKeeper;
+import org.apache.zookeeper.data.ACL;
+import org.jclouds.blobstore.BlobStore;
+import org.jclouds.domain.Credentials;
+import org.testng.Assert;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.bookkeeper.client.BookKeeper;
-import org.apache.bookkeeper.client.LedgerHandle;
-import org.apache.bookkeeper.client.PulsarMockBookKeeper;
-import org.apache.bookkeeper.client.api.DigestType;
-import org.apache.bookkeeper.client.api.LedgerMetadata;
-import org.apache.bookkeeper.client.api.ReadHandle;
-import org.apache.bookkeeper.common.util.OrderedScheduler;
-import org.apache.bookkeeper.mledger.offload.jcloud.impl.DataBlockHeaderImpl;
-import org.apache.bookkeeper.mledger.offload.jcloud.provider.JCloudBlobStoreProvider;
-import org.apache.bookkeeper.mledger.offload.jcloud.provider.TieredStorageConfiguration;
-import org.apache.bookkeeper.util.ZkUtils;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.pulsar.jcloud.shade.com.google.common.base.Supplier;
-import org.apache.zookeeper.CreateMode;
-import org.apache.zookeeper.MockZooKeeper;
-import org.apache.zookeeper.data.ACL;
-
-import org.jclouds.blobstore.BlobStore;
-import org.jclouds.blobstore.domain.Blob;
-import org.jclouds.domain.Credentials;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.testng.Assert;
-
-import com.google.common.util.concurrent.MoreExecutors;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 public abstract class BlobStoreManagedLedgerOffloaderBase {
 

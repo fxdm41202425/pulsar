@@ -106,6 +106,8 @@ class OpAddEntry extends SafeRunnable implements AddCallback, CloseCallback {
 
             // internally asyncAddEntry() will take the ownership of the buffer and release it at the end
             addOpCount = ManagedLedgerImpl.ADD_OP_COUNT_UPDATER.incrementAndGet(ml);
+
+            // 内部异步增加消息将会获取缓冲区的所有权并在末尾释放
             lastInitTime = System.nanoTime();
             ledger.asyncAddEntry(duplicateBuffer, this, addOpCount);
         } else {
@@ -122,6 +124,7 @@ class OpAddEntry extends SafeRunnable implements AddCallback, CloseCallback {
         }
     }
 
+    // 添加消息后，由 bookkeeper 回调
     @Override
     public void addComplete(int rc, final LedgerHandle lh, long entryId, Object ctx) {
 
@@ -152,6 +155,7 @@ class OpAddEntry extends SafeRunnable implements AddCallback, CloseCallback {
             handleAddFailure(lh);
         } else {
             // Trigger addComplete callback in a thread hashed on the managed ledger name
+            // 触发 addComplete 回调 在特定线程里，这里是以 ledger name 为哈希槽里，保证顺序
             ml.getExecutor().executeOrdered(ml.getName(), this);
         }
     }
@@ -254,16 +258,19 @@ class OpAddEntry extends SafeRunnable implements AddCallback, CloseCallback {
      * 
      * @param lh
      */
+    // 这里消息添加失败的异常处理
     void handleAddFailure(final LedgerHandle lh) {
         // If we get a write error, we will try to create a new ledger and re-submit the pending writes. If the
         // ledger creation fails (persistent bk failure, another instance owning the ML, ...), then the writes will
         // be marked as failed.
+        // 如果收到写入错误，将尝试创建新的 ledger 并重新提交挂起的写操作。 如果ledger创建失败（可能是 bookie 实例失败，将切换另外一个拥有 mangerdledger 的实例），则写入将被标记为失败。
         ManagedLedgerImpl finalMl = this.ml;
         finalMl.mbean.recordAddEntryError();
 
         finalMl.getExecutor().executeOrdered(finalMl.getName(), SafeRun.safeRun(() -> {
             // Force the creation of a new ledger. Doing it in a background thread to avoid acquiring ML lock
             // from a BK callback.
+            // 强制创建新的 ledger。这里用后台线程执行是为了避免请求ML lock（其实就是synchronized方法） 在BK 执行回调的时候。
             finalMl.ledgerClosed(lh);
         }));
     }

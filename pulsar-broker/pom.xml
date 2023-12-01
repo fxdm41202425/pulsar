@@ -405,8 +405,8 @@
               <tasks>
                 <echo>copy test examples package</echo>
                 <mkdir dir="${basedir}/src/test/resources"/>
-                <copy file="${basedir}/../pulsar-functions/java-examples/target/pulsar-functions-api-examples.jar" tofile="${basedir}/src/test/resources/pulsar-functions-api-examples.jar"/>
-                <copy file="${basedir}/../pulsar-io/data-generator/target/pulsar-io-data-generator-${project.version}.nar" tofile="${basedir}/src/test/resources/pulsar-io-data-generator.nar"/>
+<!--                <copy file="${basedir}/../pulsar-functions/java-examples/target/pulsar-functions-api-examples.jar" tofile="${basedir}/src/test/resources/pulsar-functions-api-examples.jar"/>-->
+<!--                <copy file="${basedir}/../pulsar-io/data-generator/target/pulsar-io-data-generator-${project.version}.nar" tofile="${basedir}/src/test/resources/pulsar-io-data-generator.nar"/>-->
               </tasks>
             </configuration>
           </execution>

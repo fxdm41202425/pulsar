@@ -30,18 +30,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class ConnectionHandler {
+    //用于原子更新ClientCnx
     private static final AtomicReferenceFieldUpdater<ConnectionHandler, ClientCnx> CLIENT_CNX_UPDATER =
             AtomicReferenceFieldUpdater.newUpdater(ConnectionHandler.class, ClientCnx.class, "clientCnx");
+
+    //封装底层的客户端控制上下文，是实际的处理网络连接的
     @SuppressWarnings("unused")
     private volatile ClientCnx clientCnx = null;
 
+    //客户端句柄状态
     protected final HandlerState state;
+
+    //用于自动重连的时间组件
     protected final Backoff backoff;
     private static final AtomicLongFieldUpdater<ConnectionHandler> EPOCH_UPDATER = AtomicLongFieldUpdater
             .newUpdater(ConnectionHandler.class, "epoch");
     private volatile long epoch = 0L;
     protected volatile long lastConnectionClosedTimestamp = 0L;
 
+    //connection 用于回调
     interface Connection {
         void connectionFailed(PulsarClientException exception);
         void connectionOpened(ClientCnx cnx);
@@ -57,17 +64,20 @@ public class ConnectionHandler {
     }
 
     protected void grabCnx() {
+        //如果ClientCnx不为空，则直接返回，因为已经设置过了，这时候就忽略重连请求
         if (CLIENT_CNX_UPDATER.get(this) != null) {
             log.warn("[{}] [{}] Client cnx already set, ignoring reconnection request", state.topic, state.getHandlerName());
             return;
         }
 
+        //判定下是否能重连，只有Uninitialized、Connecting、Ready才能重连
         if (!isValidStateForReconnection()) {
             // Ignore connection closed when we are shutting down
             log.info("[{}] [{}] Ignoring reconnection request (state: {})", state.topic, state.getHandlerName(), state.getState());
             return;
         }
 
+        //这时候，客户端开始获取连接 ， 如果连接发送异常，则延后重连
         try {
             state.client.getConnection(state.topic) //
                     .thenAccept(cnx -> connection.connectionOpened(cnx)) //
@@ -78,6 +88,7 @@ public class ConnectionHandler {
         }
     }
 
+    ////否则，执行 HandelConnectionError 方法，但实际上同样是 Connection 接口的 connectionFailed 方法，如下
     private Void handleConnectionError(Throwable exception) {
         log.warn("[{}] [{}] Error connecting to broker: {}", state.topic, state.getHandlerName(), exception.getMessage());
         if (exception instanceof PulsarClientException) {
@@ -88,6 +99,8 @@ public class ConnectionHandler {
             connection.connectionFailed(new PulsarClientException(exception));
         }
 
+        // 如果客户端状态为 State.Uninitialized 或 State.Connecting  或  State.Ready，
+        // 则稍后重连
         State state = this.state.getState();
         if (state == State.Uninitialized || state == State.Connecting || state == State.Ready) {
             reconnectLater(exception);

@@ -159,53 +159,129 @@ import org.slf4j.LoggerFactory;
 @Setter(AccessLevel.PROTECTED)
 public class PulsarService implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(PulsarService.class);
+
+    //服务配置
     private ServiceConfiguration config = null;
+
+    //命名空间服务
     private NamespaceService nsService = null;
+
+    //Ledger 客户端工厂类（用于创建Ledger 客户端）
     private ManagedLedgerClientFactory managedLedgerClientFactory = null;
+
+    //领导者选举服务
     private LeaderElectionService leaderElectionService = null;
+
+    //Broker 服务
     private BrokerService brokerService = null;
+
+    //Web服务，处理Http请求用
     private WebService webService = null;
+
+    //WebSocket服务，用于支持WebSocket协议
     private WebSocketService webSocketService = null;
+
+    //配置缓存服务
     private ConfigurationCacheService configurationCacheService = null;
+
+    //本地Zookeeper缓存服务
     private LocalZooKeeperCacheService localZkCacheService = null;
+
     private TopicPoliciesService topicPoliciesService = TopicPoliciesService.DISABLED;
+
+    //Bookeeper 客户端工厂
     private BookKeeperClientFactory bkClientFactory;
+
+    //Zookeeper缓存（用于本地集群配置和状态管理）
     private ZooKeeperCache localZkCache;
+
+    //全局Zookeeper缓存（用于跨地域复制集群配置）
     private GlobalZooKeeperCache globalZkCache;
+
+    //本地Zookeer连接服务提供者
     private LocalZooKeeperConnectionService localZooKeeperConnectionProvider;
+
+    //压缩器
     private Compactor compactor;
 
+    //调度线程池（pulsar核心线程池）
     private final ScheduledExecutorService executor;
+
+    //调度线程池（用于ZK缓存更新回调）
     private final ScheduledExecutorService cacheExecutor;
 
+    //顺序执行线程池
     private OrderedExecutor orderedExecutor;
+
+    //调度线程池（用于负载管理使用，定时更新、上报系统负载信息）
     private final ScheduledExecutorService loadManagerExecutor;
+
+    //调度线程池 （用于压缩）
     private ScheduledExecutorService compactorExecutor;
+
+    //顺序调度器 （卸载服务使用）
     private OrderedScheduler offloaderScheduler;
+
     private OffloadersCache offloadersCache = new OffloadersCache();
+
+    //Ledger 卸载加载器
     private LedgerOffloader defaultOffloader;
     private Map<NamespaceName, LedgerOffloader> ledgerOffloaderMap = new ConcurrentHashMap<>();
+
+    //负载报告任务
     private ScheduledFuture<?> loadReportTask = null;
+
+    //负载卸载任务
     private ScheduledFuture<?> loadSheddingTask = null;
+
+    //负载资源配额任务
     private ScheduledFuture<?> loadResourceQuotaTask = null;
+
+    //负载管理器（原子引用）
     private final AtomicReference<LoadManager> loadManager = new AtomicReference<>();
+
+    //Pulsar Admin 客户端
     private PulsarAdmin adminClient = null;
+
+    //Pulsar 客户端
     private PulsarClient client = null;
+
+    //Zookeeper 客户端工厂
     private ZooKeeperClientFactory zkClientFactory = null;
+
+    //绑定地址
     private final String bindAddress;
+
+    //通知地址
     private final String advertisedAddress;
+
+    //web服务地址（http用）
     private String webServiceAddress;
+
+    //web服务地址（https用）
     private String webServiceAddressTls;
+
+    //broker服务url（原生协议TCP）
     private String brokerServiceUrl;
+
+    //broker服务url（原生协议TCP+TLS）
     private String brokerServiceUrlTls;
+
+    //broker协议版本
     private final String brokerVersion;
     private SchemaStorage schemaStorage = null;
+
+    //Schema注册服务
     private SchemaRegistryService schemaRegistryService = null;
+
+    //工作者服务（支持函数式计算框架）
     private final Optional<WorkerService> functionWorkerService;
     private ProtocolHandlers protocolHandlers = null;
 
+    //系统关闭hook
     private final ShutdownService shutdownService;
 
+    //指标生成器
     private MetricsGenerator metricsGenerator;
 
     private TransactionMetadataStoreService transactionMetadataStoreService;
@@ -221,9 +297,13 @@ public class PulsarService implements AutoCloseable {
         Init, Started, Closed
     }
 
+    //Pulsar 状态
     private volatile State state;
 
+    // 互斥锁（用于启动、关闭）
     private final ReentrantLock mutex = new ReentrantLock();
+
+    // 监视 Pulsar 是否已关闭
     private final Condition isClosedCondition = mutex.newCondition();
     // key is listener name , value is pulsar address and pulsar ssl address
     private Map<String, AdvertisedListener> advertisedListeners;
@@ -237,6 +317,7 @@ public class PulsarService implements AutoCloseable {
 
     public PulsarService(ServiceConfiguration config, Optional<WorkerService> functionWorkerService,
                          Consumer<Integer> processTerminator) {
+        // 验证当前配置是否可以
         // Validate correctness of configuration
         PulsarConfigurationLoader.isComplete(config);
         // validate `advertisedAddress`, `advertisedListeners`, `internalListenerName`
@@ -410,8 +491,10 @@ public class PulsarService implements AutoCloseable {
      * Start the pulsar service instance.
      */
     public void start() throws PulsarServerException {
+        // 启动互斥锁，避免重复启动
         mutex.lock();
 
+        // 打印系统版本信息
         LOG.info("Starting Pulsar Broker service; version: '{}'", ( brokerVersion != null ? brokerVersion : "unknown" )  );
         LOG.info("Git Revision {}", PulsarVersion.getGitSha());
         LOG.info("Built by {} on {} at {}",
@@ -420,6 +503,7 @@ public class PulsarService implements AutoCloseable {
                  PulsarVersion.getBuildTime());
 
         try {
+            // 状态检查，如果已是初始化状态，则抛异常
             if (state != State.Init) {
                 throw new PulsarServerException("Cannot start the service once it was stopped");
             }
@@ -442,6 +526,7 @@ public class PulsarService implements AutoCloseable {
             protocolHandlers.initialize(config);
 
             // Now we are ready to start services
+            //首先连接本地Zookeeper，并注册session失效处理器
             localZooKeeperConnectionProvider = new LocalZooKeeperConnectionService(getZooKeeperClientFactory(),
                     config.getZookeeperServers(), config.getZooKeeperSessionTimeoutMillis());
             ZookeeperSessionExpiredHandler sessionExpiredHandler = null;
@@ -455,30 +540,38 @@ public class PulsarService implements AutoCloseable {
             localZooKeeperConnectionProvider.start(sessionExpiredHandler);
 
             // Initialize and start service to access configuration repository.
+            // 初始化和启动访问配置仓库，包括本地（local）集群缓存和全局（global）集群缓存
             this.startZkCacheService();
 
+            // 创建 bookkeeper 客户端工厂
             this.bkClientFactory = newBookKeeperClientFactory();
             managedLedgerClientFactory = new ManagedLedgerClientFactory(config, getZkClient(), bkClientFactory);
 
+            //创建并初始化 broker 服务
             this.brokerService = new BrokerService(this);
 
             // Start load management service (even if load balancing is disabled)
+            //创建并设置负载管理器
             this.loadManager.set(LoadManager.create(this));
 
             // needs load management service and before start broker service,
+            // 创建并启动 Namespace 服务
             this.startNamespaceService();
 
             schemaStorage = createAndStartSchemaStorage();
             schemaRegistryService = SchemaRegistryService.create(
                     schemaStorage, config.getSchemaRegistryCompatibilityCheckers());
 
+            // 创建 ledger 卸载管理器
             this.defaultOffloader = createManagedLedgerOffloader(
                     OffloadPolicies.create(this.getConfiguration().getProperties()));
             this.brokerInterceptor = BrokerInterceptors.load(config);
             brokerService.setInterceptor(getBrokerInterceptor());
             this.brokerInterceptor.initialize(this);
+            //启动 broker 服务
             brokerService.start();
 
+            //创建并初始化Web服务
             this.webService = new WebService(this);
             Map<String, Object> attributeMap = Maps.newHashMap();
             attributeMap.put(WebService.ATTRIBUTE_PULSAR_NAME, this);
@@ -491,6 +584,7 @@ public class PulsarService implements AutoCloseable {
                     return state == State.Started;
                 }
             });
+            //这里添加请求服务
             this.webService.addRestResources("/", VipStatus.class.getPackage().getName(), false, vipAttributeMap);
             this.webService.addRestResources("/", "org.apache.pulsar.broker.web", false, attributeMap);
             this.webService.addRestResources("/admin", "org.apache.pulsar.broker.admin.v1", true, attributeMap);
@@ -509,6 +603,7 @@ public class PulsarService implements AutoCloseable {
                     new ServletHolder(metricsServlet),
                     false, attributeMap);
 
+            //如果Websocket服务启用，则创建和启动Websocket服务
             if (config.isWebSocketServiceEnabled()) {
                 // Use local broker address to avoid different IP address when using a VIP for service discovery
                 this.webSocketService = new WebSocketService(null, config);
@@ -566,6 +661,7 @@ public class PulsarService implements AutoCloseable {
             startLeaderElectionService();
 
             // Register heartbeat and bootstrap namespaces.
+            //注册 Namespace 心跳和启动（确认当前 broker 的 Namespace，加载和创建分配属于当前broker的 Topic 集合）
             this.nsService.registerBootstrapNamespaces();
 
             // Register pulsar system namespaces and start transaction meta store service
@@ -582,11 +678,13 @@ public class PulsarService implements AutoCloseable {
                         .newProvider(config.getTransactionBufferProviderClassName());
             }
 
+            //创建指标生成器
             this.metricsGenerator = new MetricsGenerator(this);
 
             // By starting the Load manager service, the broker will also become visible
             // to the rest of the broker by creating the registration z-node. This needs
             // to be done only when the broker is fully operative.
+            //启动负载管理器服务
             this.startLoadManagementService();
 
             // Initialize the message protocol handlers.
@@ -597,11 +695,14 @@ public class PulsarService implements AutoCloseable {
                 this.protocolHandlers.newChannelInitializers();
             this.brokerService.startProtocolHandlers(protocolHandlerChannelInitializers);
 
+            //尝试注册 SLA Namespace
             acquireSLANamespace();
 
             // start function worker service if necessary
+            //如果需要，启动函数工作者服务
             this.startWorkerService(brokerService.getAuthenticationService(), brokerService.getAuthorizationService());
 
+            //至此，消息服务已经启动完成，等待生产者、消费者连接。
             final String bootstrapMessage = "bootstrap service "
                     + (config.getWebServicePort().isPresent() ? "port = " + config.getWebServicePort().get() : "")
                     + (config.getWebServicePortTls().isPresent() ? ", tls-port = " + config.getWebServicePortTls() : "")

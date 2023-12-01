@@ -47,6 +47,7 @@ public interface LookupService extends AutoCloseable {
     /**
      * Instruct the LookupService to switch to a new service URL for all subsequent requests
      */
+	//用于动态更新serviceUrl
     void updateServiceUrl(String serviceUrl) throws PulsarClientException;
 
     /**
@@ -57,6 +58,7 @@ public interface LookupService extends AutoCloseable {
      *            topic-name
      * @return a pair of addresses, representing the logical and physical address of the broker that serves given topic
      */
+	//根据Topic来获取活的broker地址
     CompletableFuture<Pair<InetSocketAddress, InetSocketAddress>> getBroker(TopicName topicName);
 
 	/**
@@ -65,6 +67,7 @@ public interface LookupService extends AutoCloseable {
 	 * @param topicName topic-name
 	 * @return
 	 */
+	//根据Topic获取Topic分区信息
 	CompletableFuture<PartitionedTopicMetadata> getPartitionedTopicMetadata(TopicName topicName);
 
 	/**
@@ -73,6 +76,7 @@ public interface LookupService extends AutoCloseable {
 	 * @param topicName topic-name
 	 * @return SchemaInfo
 	 */
+	//根据Topic获取Schema信息
 	CompletableFuture<Optional<SchemaInfo>> getSchema(TopicName topicName);
 
 	/**
@@ -89,6 +93,7 @@ public interface LookupService extends AutoCloseable {
 	 *
 	 * @return
 	 */
+	//获取serviceUrl
 	String getServiceUrl();
 
 	/**
@@ -97,6 +102,7 @@ public interface LookupService extends AutoCloseable {
 	 * @param namespace : namespace-name
 	 * @return
 	 */
+	//获取Namespace下所有的topic
 	CompletableFuture<List<String>> getTopicsUnderNamespace(NamespaceName namespace, Mode mode);
 
 }

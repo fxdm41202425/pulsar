@@ -329,6 +329,7 @@ public class MessageDeduplication {
         if (producerName.startsWith(replicatorPrefix)) {
             // Message is coming from replication, we need to use the original producer name and sequence id
             // for the purpose of deduplication and not rely on the "replicator" name.
+            // 消息来自复制器，需要使用原始生产者名称和序列ID进行重复数据消除，而不依赖“复制器”名称。
             int readerIndex = headersAndPayload.readerIndex();
             MessageMetadata md = Commands.parseMessageMetadata(headersAndPayload);
             producerName = md.getProducerName();
@@ -343,7 +344,9 @@ public class MessageDeduplication {
 
         // Synchronize the get() and subsequent put() on the map. This would only be relevant if the producer
         // disconnects and re-connects very quickly. At that point the call can be coming from a different thread
+        // 在map 使用同步get()和随后的put()。只有当生产者很快断开并重新连接时，这才是相关的。此时，调用可能来自不同的线程，故用同步区块
         synchronized (highestSequencedPushed) {
+            // 通过生产者名称读取最后使用的序列ID，如果当前序列ID小于等于最后序列ID，则返回fales
             Long lastSequenceIdPushed = highestSequencedPushed.get(producerName);
             if (lastSequenceIdPushed != null && sequenceId <= lastSequenceIdPushed) {
                 if (log.isDebugEnabled()) {
@@ -362,6 +365,8 @@ public class MessageDeduplication {
                     return MessageDupStatus.Unknown;
                 }
             }
+
+            // 这里代表当前序列ID可用
             highestSequencedPushed.put(producerName, highestSequenceId);
         }
         return MessageDupStatus.NotDup;

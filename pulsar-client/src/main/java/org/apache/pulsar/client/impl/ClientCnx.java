@@ -373,6 +373,7 @@ public class ClientCnx extends PulsarHandler {
                     ledgerId, entryId);
         }
 
+        // 找到生产者，处理 broker 应答（也就是回执）
         ProducerImpl<?> producer = producers.get(producerId);
         if (producer != null) {
             producer.ackReceived(this, sequenceId, highestSequenceId, ledgerId, entryId);

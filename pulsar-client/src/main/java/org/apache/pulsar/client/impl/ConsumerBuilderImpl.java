@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.apache.pulsar.client.impl;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -94,6 +95,7 @@ public class ConsumerBuilderImpl<T> implements ConsumerBuilder<T> {
         return new ConsumerBuilderImpl<>(client, conf.clone(), schema);
     }
 
+    //消费者订阅，这里实际上，调用的是异步订阅方法
     @Override
     public Consumer<T> subscribe() throws PulsarClientException {
         try {
@@ -105,11 +107,13 @@ public class ConsumerBuilderImpl<T> implements ConsumerBuilder<T> {
 
     @Override
     public CompletableFuture<Consumer<T>> subscribeAsync() {
+        //检查 Topic 是否有效
         if (conf.getTopicNames().isEmpty() && conf.getTopicsPattern() == null) {
             return FutureUtil
                     .failedFuture(new InvalidConfigurationException("Topic name must be set on the consumer builder"));
         }
 
+        //检查订阅名不能为空
         if (StringUtils.isBlank(conf.getSubscriptionName())) {
             return FutureUtil.failedFuture(
                     new InvalidConfigurationException("Subscription name must be set on the consumer builder"));
@@ -119,16 +123,18 @@ public class ConsumerBuilderImpl<T> implements ConsumerBuilder<T> {
             return FutureUtil.failedFuture(
                     new InvalidConfigurationException("KeySharedPolicy must set with KeyShared subscription"));
         }
-        if(conf.isRetryEnable() && conf.getTopicNames().size() > 0 ) {
+        if (conf.isRetryEnable() && conf.getTopicNames().size() > 0) {
             TopicName topicFirst = TopicName.get(conf.getTopicNames().iterator().next());
-            String retryLetterTopic = topicFirst.getNamespace() + "/" + conf.getSubscriptionName() + RetryMessageUtil.RETRY_GROUP_TOPIC_SUFFIX;
-            String deadLetterTopic = topicFirst.getNamespace() + "/" + conf.getSubscriptionName() + RetryMessageUtil.DLQ_GROUP_TOPIC_SUFFIX;
-            if(conf.getDeadLetterPolicy() == null) {
+            String retryLetterTopic = topicFirst.getNamespace() + "/" + conf.getSubscriptionName() +
+                    RetryMessageUtil.RETRY_GROUP_TOPIC_SUFFIX;
+            String deadLetterTopic = topicFirst.getNamespace() + "/" + conf.getSubscriptionName() +
+                    RetryMessageUtil.DLQ_GROUP_TOPIC_SUFFIX;
+            if (conf.getDeadLetterPolicy() == null) {
                 conf.setDeadLetterPolicy(DeadLetterPolicy.builder()
-                                        .maxRedeliverCount(RetryMessageUtil.MAX_RECONSUMETIMES)
-                                        .retryLetterTopic(retryLetterTopic)
-                                        .deadLetterTopic(deadLetterTopic)
-                                        .build());
+                        .maxRedeliverCount(RetryMessageUtil.MAX_RECONSUMETIMES)
+                        .retryLetterTopic(retryLetterTopic)
+                        .deadLetterTopic(deadLetterTopic)
+                        .build());
             } else {
                 if (StringUtils.isBlank(conf.getDeadLetterPolicy().getRetryLetterTopic())) {
                     conf.getDeadLetterPolicy().setRetryLetterTopic(retryLetterTopic);
@@ -139,6 +145,8 @@ public class ConsumerBuilderImpl<T> implements ConsumerBuilder<T> {
             }
             conf.getTopicNames().add(conf.getDeadLetterPolicy().getRetryLetterTopic());
         }
+
+        //检查是否有拦截器
         return interceptorList == null || interceptorList.size() == 0 ?
                 client.subscribeAsync(conf, schema, null) :
                 client.subscribeAsync(conf, schema, new ConsumerInterceptors<>(interceptorList));
@@ -303,7 +311,7 @@ public class ConsumerBuilderImpl<T> implements ConsumerBuilder<T> {
         conf.setAutoAckOldestChunkedMessageOnQueueFull(autoAckOldestChunkedMessageOnQueueFull);
         return this;
     }
-    
+
     @Override
     public ConsumerBuilder<T> property(String key, String value) {
         checkArgument(StringUtils.isNotBlank(key) && StringUtils.isNotBlank(value),
@@ -325,7 +333,8 @@ public class ConsumerBuilderImpl<T> implements ConsumerBuilder<T> {
 
     @Override
     public ConsumerBuilder<T> maxTotalReceiverQueueSizeAcrossPartitions(int maxTotalReceiverQueueSizeAcrossPartitions) {
-        checkArgument(maxTotalReceiverQueueSizeAcrossPartitions >= 0, "maxTotalReceiverQueueSizeAcrossPartitions needs to be >= 0");
+        checkArgument(maxTotalReceiverQueueSizeAcrossPartitions >= 0,
+                "maxTotalReceiverQueueSizeAcrossPartitions needs to be >= 0");
         conf.setMaxTotalReceiverQueueSizeAcrossPartitions(maxTotalReceiverQueueSizeAcrossPartitions);
         return this;
     }
@@ -351,12 +360,12 @@ public class ConsumerBuilderImpl<T> implements ConsumerBuilder<T> {
         return this;
     }
 
-	@Override
-	public ConsumerBuilder<T> subscriptionInitialPosition(@NonNull SubscriptionInitialPosition
-                                                                      subscriptionInitialPosition) {
+    @Override
+    public ConsumerBuilder<T> subscriptionInitialPosition(@NonNull SubscriptionInitialPosition
+                                                                  subscriptionInitialPosition) {
         conf.setSubscriptionInitialPosition(subscriptionInitialPosition);
-		return this;
-	}
+        return this;
+    }
 
     @Override
     public ConsumerBuilder<T> subscriptionTopicsMode(@NonNull RegexSubscriptionMode mode) {

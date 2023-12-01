@@ -2207,6 +2207,9 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
             return ObjectMapperFactory.getThreadLocal().readValue(content, PartitionedTopicMetadata.class);
         }).thenApply(metadata -> {
             // if the partitioned topic is not found in zk, then the topic is not partitioned
+
+            // 如果 Topic 没有找到分区信息，则它不是分区 Topic
+            //默认0分区，也就是未分区
             return metadata.orElseGet(() -> new PartitionedTopicMetadata());
         });
     }

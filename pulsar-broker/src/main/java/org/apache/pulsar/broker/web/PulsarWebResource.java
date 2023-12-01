@@ -386,16 +386,21 @@ public abstract class PulsarWebResource {
         }
     }
 
+
+    // 如果是不同集群，则获取集群数据，否则直接返回null
     protected static CompletableFuture<ClusterData> getClusterDataIfDifferentCluster(PulsarService pulsar,
          String cluster, String clientAppId) {
 
         CompletableFuture<ClusterData> clusterDataFuture = new CompletableFuture<>();
 
+        // 简单校验集群信息
         if (!isValidCluster(pulsar, cluster)) {
             try {
                 // this code should only happen with a v1 namespace format prop/cluster/namespaces
+                // 这里代码为了兼容 v1 namespace 版本的格式：prop/cluster/namespaces（2.0版本这里已经被抛弃）
                 if (!pulsar.getConfiguration().getClusterName().equals(cluster)) {
                     // redirect to the cluster requested
+                    // 从配置缓存中读取集群信息，将重定向此集群
                     pulsar.getConfigurationCache().clustersCache().getAsync(path("clusters", cluster))
                             .thenAccept(clusterDataResult -> {
                                 if (clusterDataResult.isPresent()) {
@@ -750,8 +755,11 @@ public abstract class PulsarWebResource {
         }
     }
 
+    // 通过全局命名空间获取集群信息
     public static CompletableFuture<ClusterData> checkLocalOrGetPeerReplicationCluster(PulsarService pulsarService,
             NamespaceName namespace) {
+
+        // 如果 Namespace 不是全局的，则直接返回
         if (!namespace.isGlobal()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -759,15 +767,22 @@ public abstract class PulsarWebResource {
         final String localCluster = pulsarService.getConfiguration().getClusterName();
         final String path = AdminResource.path(POLICIES, namespace.toString());
 
+        //查询全局 Namespace 策略信息
         pulsarService.getConfigurationCache().policiesCache().getAsync(path).thenAccept(policiesResult -> {
             if (policiesResult.isPresent()) {
+
+                // 获取策略信息
                 Policies policies = policiesResult.get();
+
+                // 策略中副本集群为空，则返回异常
                 if (policies.replication_clusters.isEmpty()) {
                     String msg = String.format(
                             "Namespace does not have any clusters configured : local_cluster=%s ns=%s",
                             localCluster, namespace.toString());
                     log.warn(msg);
                     validationFuture.completeExceptionally(new RestException(Status.PRECONDITION_FAILED, msg));
+
+                // 策略中副本集群不包含本地集群，则继续查询策略副本中本地集群信息
                 } else if (!policies.replication_clusters.contains(localCluster)) {
                     ClusterData ownerPeerCluster = getOwnerFromPeerClusterList(pulsarService,
                             policies.replication_clusters);
@@ -776,6 +791,8 @@ public abstract class PulsarWebResource {
                         validationFuture.complete(ownerPeerCluster);
                         return;
                     }
+
+                    //未找到 Namespace 中本地集群信息
                     String msg = String.format(
                             "Namespace missing local cluster name in clusters list: local_cluster=%s ns=%s clusters=%s",
                             localCluster, namespace.toString(), policies.replication_clusters);
@@ -783,9 +800,13 @@ public abstract class PulsarWebResource {
                     log.warn(msg);
                     validationFuture.completeExceptionally(new RestException(Status.PRECONDITION_FAILED, msg));
                 } else {
+
+                    // 这里返回正常成功（即找到副本集群配置信息）
                     validationFuture.complete(null);
                 }
             } else {
+
+                // 策略信息没有找到，返回异常
                 String msg = String.format("Namespace %s not found", namespace.toString());
                 log.warn(msg);
                 validationFuture.completeExceptionally(new RestException(Status.NOT_FOUND, "Namespace not found"));
@@ -800,6 +821,7 @@ public abstract class PulsarWebResource {
         return validationFuture;
     }
 
+    // 从集群信息中获取自己的集群数据
     private static ClusterData getOwnerFromPeerClusterList(PulsarService pulsar, Set<String> replicationClusters) {
         String currentCluster = pulsar.getConfiguration().getClusterName();
         if (replicationClusters == null || replicationClusters.isEmpty() || isBlank(currentCluster)) {
@@ -807,11 +829,15 @@ public abstract class PulsarWebResource {
         }
 
         try {
+
+            //从集群缓存中查询本地集群信息
             Optional<ClusterData> cluster = pulsar.getConfigurationCache().clustersCache()
                     .get(path("clusters", currentCluster));
             if (!cluster.isPresent() || cluster.get().getPeerClusterNames() == null) {
                 return null;
             }
+
+            // 从本地集群中全局配置匹配副本集群信息，如果匹配成功，则返回集群信息，如果没有找到，则抛异常
             for (String peerCluster : cluster.get().getPeerClusterNames()) {
                 if (replicationClusters.contains(peerCluster)) {
                     return pulsar.getConfigurationCache().clustersCache().get(path("clusters", peerCluster))
@@ -856,6 +882,7 @@ public abstract class PulsarWebResource {
         return isLeaderBroker(pulsar());
     }
 
+    //判定是不是领导者 broker
     protected static boolean isLeaderBroker(PulsarService pulsar) {
 
         String leaderAddress = pulsar.getLeaderElectionService().getCurrentLeader().getServiceUrl();

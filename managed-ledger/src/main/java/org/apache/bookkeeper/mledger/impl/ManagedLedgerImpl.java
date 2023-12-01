@@ -619,6 +619,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         OpAddEntry addOperation = OpAddEntry.create(this, buffer, callback, ctx);
 
         // Jump to specific thread to avoid contention from writers writing from different threads
+        // 跳到特定线程以避免来自不同线程的写入竞争（这里以 Topic 名为Key,特定的Topic请求放到一个队列）
         executor.executeOrdered(name, safeRun(() -> internalAsyncAddEntry(addOperation)));
     }
 
@@ -666,9 +667,13 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             checkArgument(state == State.LedgerOpened, "ledger=%s is not opened", state);
 
             // Write into lastLedger
+            // 写入当前 ledger
             addOperation.setLedger(currentLedger);
 
+            // 统计消息数
             ++currentLedgerEntries;
+
+            // 统计消息字节数
             currentLedgerSize += addOperation.data.readableBytes();
 
             if (log.isDebugEnabled()) {
@@ -676,6 +681,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                         currentLedgerEntries);
             }
 
+            // 判定当前的 ledger 是否已满
             if (currentLedgerIsFull()) {
                 if (log.isDebugEnabled()) {
                     log.debug("[{}] Closing current ledger lh={}", name, currentLedger.getId());
@@ -761,13 +767,17 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     public synchronized void asyncOpenCursor(final String cursorName, final InitialPosition initialPosition,
             Map<String, Long> properties, final OpenCursorCallback callback, final Object ctx) {
         try {
+            //检查 ledger 是否打开状态
             checkManagedLedgerIsOpen();
+
+            //检查 ledger 是否已关闭或删除
             checkFenced();
         } catch (ManagedLedgerException e) {
             callback.openCursorFailed(e, ctx);
             return;
         }
 
+        // 查看未初始化完成游标中是否有当前游标，如果有，则直接这里设置回调，并返回
         if (uninitializedCursors.containsKey(cursorName)) {
             uninitializedCursors.get(cursorName).thenAccept(cursor -> callback.openCursorComplete(cursor, ctx)).exceptionally(ex -> {
                 callback.openCursorFailed((ManagedLedgerException) ex, ctx);
@@ -775,6 +785,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             });
             return;
         }
+
+        // 根据游标名读取游标，如果不为空，则直接回调，并返回
         ManagedCursor cachedCursor = cursors.get(cursorName);
         if (cachedCursor != null) {
             if (log.isDebugEnabled()) {
@@ -785,6 +797,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
 
         // Create a new one and persist it
+        // 到这里，意味着创建新的游标并且保存它
         if (log.isDebugEnabled()) {
             log.debug("[{}] Creating new cursor: {}", name, cursorName);
         }
@@ -796,15 +809,22 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             @Override
             public void operationComplete() {
                 log.info("[{}] Opened new cursor: {}", name, cursor);
+                // 创建游标成功，把当前游标激活
                 cursor.setActive();
                 // Update the ack position (ignoring entries that were written while the cursor was being created)
+                // 更新确认 position （当游标正在创建的时候，忽略消息写入），如果初始化 position 为 InitialPosition.Latest，
+                // 则获取最后 position 和 消息总计数，否则就 ledger 的（就是 ledger 的 entryId = -1），之前的所有ledger历史总计数
+                // 这里就是初始化游标 position ，决定着订阅起始点
                 cursor.initializeCursorPosition(initialPosition == InitialPosition.Latest ? getLastPositionAndCounter()
                         : getFirstPositionAndCounter());
 
+                // 新增游标，移除等待队列中的 futrue
                 synchronized (ManagedLedgerImpl.this) {
                     cursors.add(cursor);
                     uninitializedCursors.remove(cursorName).complete(cursor);
                 }
+
+                // 执行成功
                 callback.openCursorComplete(cursor, ctx);
             }
 
@@ -1264,6 +1284,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // //////////////////////////////////////////////////////////////////////
     // Callbacks
 
+
+    // 添加消息后，由 bookkeeper 回调
     @Override
     public synchronized void createComplete(int rc, final LedgerHandle lh, Object ctx) {
         if (log.isDebugEnabled()) {
@@ -1430,6 +1452,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // //////////////////////////////////////////////////////////////////////
     // Private helpers
 
+    // 添加消息失败时，关闭原有的ledger并创建新的ledger
     synchronized void ledgerClosed(final LedgerHandle lh) {
         final State state = STATE_UPDATER.get(this);
         LedgerHandle currentLedger = this.currentLedger;
@@ -1437,11 +1460,13 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             STATE_UPDATER.set(this, State.ClosedLedger);
         } else if (state == State.Closed) {
             // The managed ledger was closed during the write operation
+            // 如果已经关闭，则清理正处理的写请求，设置异常
             clearPendingAddEntries(new ManagedLedgerAlreadyClosedException("Managed ledger was already closed"));
             return;
         } else {
             // In case we get multiple write errors for different outstanding write request, we should close the ledger
             // just once
+            // 为了避免不同的未完成写请求设置多个写错误，我们应该只关闭仅仅一个 ledger
             return;
         }
 
@@ -1449,24 +1474,32 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         if (log.isDebugEnabled()) {
             log.debug("[{}] Ledger has been closed id={} entries={}", name, lh.getId(), entriesInLedger);
         }
+
+        // 构建新的 ledger 信息
         if (entriesInLedger > 0) {
             LedgerInfo info = LedgerInfo.newBuilder().setLedgerId(lh.getId()).setEntries(entriesInLedger)
                     .setSize(lh.getLength()).setTimestamp(clock.millis()).build();
             ledgers.put(lh.getId(), info);
         } else {
             // The last ledger was empty, so we can discard it
+            // 如果最后一个ledger为空，则丢弃（因为这个ledger写入出问题了）
             ledgers.remove(lh.getId());
             mbean.startDataLedgerDeleteOp();
+
+            // 异步删除
             bookKeeper.asyncDeleteLedger(lh.getId(), (rc, ctx) -> {
                 mbean.endDataLedgerDeleteOp();
                 log.info("[{}] Delete complete for empty ledger {}. rc={}", name, lh.getId(), rc);
             }, null);
         }
 
+        // 检查是否已有消费完的ledger，并且删除
         trimConsumedLedgersInBackground();
 
+        // 触发数据备份在后台
         maybeOffloadInBackground(NULL_OFFLOAD_PROMISE);
 
+        // 如果不为空，则创建新 ledger 并处理正等待写入的消息
         if (!pendingAddEntries.isEmpty()) {
             // Need to create a new ledger to write pending entries
             createLedgerAfterClosed();
@@ -1980,6 +2013,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         return position;
     }
 
+    // 通知游标，有消息到来
     void notifyCursors() {
         while (true) {
             final ManagedCursorImpl waitingCursor = waitingCursors.poll();
@@ -2101,12 +2135,16 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
      */
     void internalTrimConsumedLedgers(CompletableFuture<?> promise) {
         // Ensure only one trimming operation is active
+        // 同一时间只能有一个清理线程，这里先尝试获取互斥锁
         if (!trimmerMutex.tryLock()) {
             scheduleDeferredTrimming(promise);
             return;
         }
 
+        // ledger 需要删除列表
         List<LedgerInfo> ledgersToDelete = Lists.newArrayList();
+
+        // 卸载的ledger 要删除列表
         List<LedgerInfo> offloadedLedgersToDelete = Lists.newArrayList();
         Optional<OffloadPolicies> optionalOffloadPolicies = Optional.ofNullable(config.getLedgerOffloader() != null
                 && config.getLedgerOffloader() != NullLedgerOffloader.INSTANCE
@@ -2117,6 +2155,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 log.debug("[{}] Start TrimConsumedLedgers. ledgers={} totalSize={}", name, ledgers.keySet(),
                         TOTAL_SIZE_UPDATER.get(this));
             }
+
+            // 验证状态，不能清理已关闭的 ledger
             if (STATE_UPDATER.get(this) == State.Closed) {
                 log.debug("[{}] Ignoring trimming request since the managed ledger was already closed", name);
                 trimmerMutex.unlock();
@@ -2125,16 +2165,24 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             }
 
             long slowestReaderLedgerId = -1;
+            // 无游标
             if (!cursors.hasDurableCursors()) {
                 // At this point the lastLedger will be pointing to the
                 // ledger that has just been closed, therefore the +1 to
                 // include lastLedger in the trimming.
+                // 此时，最后的Ledger将指向刚刚关闭的 ledger，因此在剪裁中包含最后Ledger的+1
                 slowestReaderLedgerId = currentLedger.getId() + 1;
             } else {
+
+                // 从游标中找出最慢的读位置
                 PositionImpl slowestReaderPosition = cursors.getSlowestReaderPosition();
                 if (slowestReaderPosition != null) {
+
+                    // 这里就找到了最慢所在的 ledger，清理以它为准
                     slowestReaderLedgerId = slowestReaderPosition.getLedgerId();
                 } else {
+
+                    // 没有找到对应的读位置，抛异常
                     promise.completeExceptionally(new ManagedLedgerException("Couldn't find reader position"));
                     trimmerMutex.unlock();
                     return;
@@ -2145,8 +2193,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 log.debug("[{}] Slowest consumer ledger id: {}", name, slowestReaderLedgerId);
             }
             // skip ledger if retention constraint met
+            // 拿到ledgerID之前所有的ledger列表
             for (LedgerInfo ls : ledgers.headMap(slowestReaderLedgerId, false).values()) {
+                // 是否过期
                 boolean expired = hasLedgerRetentionExpired(ls.getTimestamp());
+                // 是否超过大小配额
                 boolean overRetentionQuota = isLedgerRetentionOverSizeQuota();
 
                 if (log.isDebugEnabled()) {
@@ -2156,14 +2207,16 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                             name, ls.getLedgerId(), (clock.millis() - ls.getTimestamp()) / 1000.0, expired,
                             overRetentionQuota, currentLedger.getId());
                 }
+
+                // 如果是当前的ledger，则直接跳过
                 if (ls.getLedgerId() == currentLedger.getId()) {
                     log.debug("[{}] Ledger {} skipped for deletion as it is currently being written to", name,
                             ls.getLedgerId());
                     break;
-                } else if (expired) {
+                } else if (expired) {//过期的ledger
                     log.debug("[{}] Ledger {} has expired, ts {}", name, ls.getLedgerId(), ls.getTimestamp());
                     ledgersToDelete.add(ls);
-                } else if (overRetentionQuota) {
+                } else if (overRetentionQuota) {//大小超过配额
                     log.debug("[{}] Ledger {} is over quota", name, ls.getLedgerId());
                     ledgersToDelete.add(ls);
                 } else {
@@ -2174,6 +2227,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     invalidateReadHandle(ls.getLedgerId());
                 }
             }
+
+            // 检查所有的ledger，判定他们是否已完成存档操作
             for (LedgerInfo ls : ledgers.values()) {
                 if (isOffloadedNeedsDelete(ls.getOffloadContext(), optionalOffloadPolicies)
                         && !ledgersToDelete.contains(ls)) {
@@ -2183,12 +2238,14 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 }
             }
 
+            // 如果两个都为空，则立即返回
             if (ledgersToDelete.isEmpty() && offloadedLedgersToDelete.isEmpty()) {
                 trimmerMutex.unlock();
                 promise.complete(null);
                 return;
             }
 
+            // 状态显示正在创建中，或者 尝试获取 ledgersList 互斥锁不成功（避免另外的线程导致死锁） ，则现在放弃回收，等下一轮（间隔100ms）回收
             if (STATE_UPDATER.get(this) == State.CreatingLedger // Give up now and schedule a new trimming
                     || !metadataMutex.tryLock()) { // Avoid deadlocks with other operations updating the ledgers list
                 scheduleDeferredTrimming(promise);
@@ -2200,6 +2257,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
             PositionImpl currentLastConfirmedEntry = lastConfirmedEntry;
             // Update metadata
+            // 更新元数据
             for (LedgerInfo ls : ledgersToDelete) {
                 if (currentLastConfirmedEntry != null && ls.getLedgerId() == currentLastConfirmedEntry.getLedgerId()) {
                     // this info is relevant because the lastMessageId won't be available anymore
@@ -2207,19 +2265,32 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                             ls.getLedgerId(), currentLastConfirmedEntry);
                 }
 
+                // ledger 缓存中移除
                 invalidateReadHandle(ls.getLedgerId());
 
+                // 列表移除
                 ledgers.remove(ls.getLedgerId());
+
+                // 更新消息数量
                 NUMBER_OF_ENTRIES_UPDATER.addAndGet(this, -ls.getEntries());
+
+                // 更新总大小
                 TOTAL_SIZE_UPDATER.addAndGet(this, -ls.getSize());
 
+                //缓存失效
                 entryCache.invalidateAllEntries(ls.getLedgerId());
             }
+
+            // 卸载ledger处理
             for (LedgerInfo ls : offloadedLedgersToDelete) {
                 LedgerInfo.Builder newInfoBuilder = ls.toBuilder();
                 newInfoBuilder.getOffloadContextBuilder().setBookkeeperDeleted(true);
+
+                // 获取第三方备份驱动名
                 String driverName = OffloadUtils.getOffloadDriverName(ls,
                         config.getLedgerOffloader().getOffloadDriverName());
+
+                // 获取第三方备份驱动元数据
                 Map<String, String> driverMetadata = OffloadUtils.getOffloadDriverMetadata(ls,
                         config.getLedgerOffloader().getOffloadDriverMetadata());
                 OffloadUtils.setOffloadDriverMetadata(newInfoBuilder, driverName, driverMetadata);
@@ -2230,24 +2301,32 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 log.debug("[{}] Updating of ledgers list after trimming", name);
             }
 
+            // 这里异步更新 ledger 元数据
             store.asyncUpdateLedgerIds(name, getManagedLedgerInfo(), ledgersStat, new MetaStoreCallback<Void>() {
                 @Override
                 public void operationComplete(Void result, Stat stat) {
                     log.info("[{}] End TrimConsumedLedgers. ledgers={} totalSize={}", name, ledgers.size(),
                             TOTAL_SIZE_UPDATER.get(ManagedLedgerImpl.this));
                     ledgersStat = stat;
+
+                    // 注意解锁顺序
                     metadataMutex.unlock();
                     trimmerMutex.unlock();
 
+                    // 元数据更新成功后，这里开始异步删除 ledger 以及 备份的ledger（也就是从云存储删除）
                     for (LedgerInfo ls : ledgersToDelete) {
                         log.info("[{}] Removing ledger {} - size: {}", name, ls.getLedgerId(), ls.getSize());
                         asyncDeleteLedger(ls.getLedgerId(), ls);
                     }
+
+                    // 这里直接删除备份的ledger （也就是从云存储删除）
                     for (LedgerInfo ls : offloadedLedgersToDelete) {
                         log.info("[{}] Deleting offloaded ledger {} from bookkeeper - size: {}", name, ls.getLedgerId(),
                                 ls.getSize());
                         asyncDeleteLedgerFromBookKeeper(ls.getLedgerId());
                     }
+
+                    // 成功
                     promise.complete(null);
                 }
 
@@ -2744,6 +2823,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         log.info("[{}] Preparing metadata to offload ledger {} with uuid {}", name, ledgerId, uuid);
         return transformLedgerInfo(ledgerId,
                                    (oldInfo) -> {
+
+                                       // 直接指定高64位和低64位的值，用户配置指定
                                        if (oldInfo.getOffloadContext().hasUidMsb()) {
                                            UUID oldUuid = new UUID(oldInfo.getOffloadContext().getUidMsb(),
                                                                    oldInfo.getOffloadContext().getUidLsb());
@@ -2818,6 +2899,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 });
     }
 
+    // 从备份仓库清理 ledger 相关数据
     private void cleanupOffloaded(long ledgerId, UUID uuid, String offloadDriverName, /*
                                                                                        * TODO: use driver name to
                                                                                        * identify offloader
@@ -3148,15 +3230,19 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     private boolean currentLedgerIsFull() {
+        // 判定是否达到空间配额，两个方面：一个是每个 ledger 达到最大消息，一个是达到最大字节数
         boolean spaceQuotaReached = (currentLedgerEntries >= config.getMaxEntriesPerLedger()
                 || currentLedgerSize >= (config.getMaxSizePerLedgerMb() * MegaByte));
 
         long timeSinceLedgerCreationMs = clock.millis() - lastLedgerCreatedTimestamp;
         boolean maxLedgerTimeReached = timeSinceLedgerCreationMs >= config.getMaximumRolloverTimeMs();
 
+        // 配额已满或创建超时
         if (spaceQuotaReached || maxLedgerTimeReached) {
-            if (config.getMinimumRolloverTimeMs() > 0) {
 
+            // 这里是最小切换时间
+            if (config.getMinimumRolloverTimeMs() > 0) {
+                // 切换超时，这里必须换 ledger
                 boolean switchLedger = timeSinceLedgerCreationMs > config.getMinimumRolloverTimeMs();
                 if (log.isDebugEnabled()) {
                     log.debug("Diff: {}, threshold: {} -- switch: {}", clock.millis() - lastLedgerCreatedTimestamp,

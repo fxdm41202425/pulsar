@@ -205,11 +205,13 @@ public class PulsarClientImpl implements PulsarClient {
         return state;
     }
 
+    //创建生产者构造者实例
     @Override
     public ProducerBuilder<byte[]> newProducer() {
         return new ProducerBuilderImpl<>(this, Schema.BYTES);
     }
 
+    //切换 ProducerBuilderImpl<T> 类，构造方法
     @Override
     public <T> ProducerBuilder<T> newProducer(Schema<T> schema) {
         return new ProducerBuilderImpl<>(this, schema);
@@ -243,6 +245,7 @@ public class PulsarClientImpl implements PulsarClient {
         return createProducerAsync(conf, schema, null);
     }
 
+    //异步创建生产者实例
     public <T> CompletableFuture<Producer<T>> createProducerAsync(ProducerConfigurationData conf, Schema<T> schema,
           ProducerInterceptors interceptors) {
         if (conf == null) {
@@ -250,27 +253,32 @@ public class PulsarClientImpl implements PulsarClient {
                 new PulsarClientException.InvalidConfigurationException("Producer configuration undefined"));
         }
 
+        //如果Schema为自动消费者Schema实例，由于这里是生产者，故抛异常
         if (schema instanceof AutoConsumeSchema) {
             return FutureUtil.failedFuture(
                 new PulsarClientException.InvalidConfigurationException("AutoConsumeSchema is only used by consumers to detect schemas automatically"));
         }
 
+        //Pulsar 客户端是否初始化完成，如果状态不是Open，则抛异常：客户端已关闭。
         if (state.get() != State.Open) {
             return FutureUtil.failedFuture(new PulsarClientException.AlreadyClosedException("Client already closed : state = " + state.get()));
         }
 
         String topic = conf.getTopicName();
 
+        //对Topic进行格式校验
         if (!TopicName.isValid(topic)) {
             return FutureUtil.failedFuture(
                 new PulsarClientException.InvalidTopicNameException("Invalid topic name: '" + topic + "'"));
         }
 
+        //自动获取Schema
         if (schema instanceof AutoProduceBytesSchema) {
             AutoProduceBytesSchema autoProduceBytesSchema = (AutoProduceBytesSchema) schema;
             if (autoProduceBytesSchema.schemaInitialized()) {
                 return createProducerAsync(topic, conf, schema, interceptors);
             }
+            //这里就是查找服务，通过Topic查询注册的Schema，如果没注册，则默认Schema.BYTES
             return lookup.getSchema(TopicName.get(conf.getTopicName()))
                     .thenCompose(schemaInfoOptional -> {
                         if (schemaInfoOptional.isPresent()) {
@@ -292,6 +300,7 @@ public class PulsarClientImpl implements PulsarClient {
                                                                    ProducerInterceptors interceptors) {
         CompletableFuture<Producer<T>> producerCreatedFuture = new CompletableFuture<>();
 
+        //通过查找服务获取Topic元数据，这里主要是确定Topic是否分区，以此来确定用哪个底层生产者实例
         getPartitionedTopicMetadata(topic).thenAccept(metadata -> {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] Received topic metadata. partitions: {}", topic, metadata.partitions);
@@ -320,6 +329,7 @@ public class PulsarClientImpl implements PulsarClient {
     }
 
     public <T> CompletableFuture<Consumer<T>> subscribeAsync(ConsumerConfigurationData<T> conf, Schema<T> schema, ConsumerInterceptors<T> interceptors) {
+        // 检查 Client 状态是否打开
         if (state.get() != State.Open) {
             return FutureUtil.failedFuture(new PulsarClientException.AlreadyClosedException("Client already closed"));
         }
@@ -329,17 +339,20 @@ public class PulsarClientImpl implements PulsarClient {
                     new PulsarClientException.InvalidConfigurationException("Consumer configuration undefined"));
         }
 
+        //检查 Topic 是否合法
         for (String topic : conf.getTopicNames()) {
             if (!TopicName.isValid(topic)) {
                 return FutureUtil.failedFuture(new PulsarClientException.InvalidTopicNameException("Invalid topic name: '" + topic + "'"));
             }
         }
 
+        //订阅名不能为空
         if (isBlank(conf.getSubscriptionName())) {
             return FutureUtil
                     .failedFuture(new PulsarClientException.InvalidConfigurationException("Empty subscription name"));
         }
 
+        //读取压缩特性仅仅被用订阅持久化 Topic，并且订阅类型为独占或故障转移模式
         if (conf.isReadCompacted() && (!conf.getTopicNames().stream()
                 .allMatch(topic -> TopicName.get(topic).getDomain() == TopicDomain.persistent)
                 || (conf.getSubscriptionType() != SubscriptionType.Exclusive
@@ -348,21 +361,26 @@ public class PulsarClientImpl implements PulsarClient {
                     "Read compacted can only be used with exclusive or failover persistent subscriptions"));
         }
 
+        // 事件监听器只允许在故障转移订阅模式下
         if (conf.getConsumerEventListener() != null && conf.getSubscriptionType() != SubscriptionType.Failover) {
             return FutureUtil.failedFuture(new PulsarClientException.InvalidConfigurationException(
                     "Active consumer listener is only supported for failover subscription"));
         }
 
+        //   如果已经设置了 正则表达式订阅 Topic，就不能指定具体的 Topic
         if (conf.getTopicsPattern() != null) {
             // If use topicsPattern, we should not use topic(), and topics() method.
             if (!conf.getTopicNames().isEmpty()){
                 return FutureUtil
                     .failedFuture(new IllegalArgumentException("Topic names list must be null when use topicsPattern"));
             }
+            //正则表达式订阅
             return patternTopicSubscribeAsync(conf, schema, interceptors);
         } else if (conf.getTopicNames().size() == 1) {
+            //单 Topic 订阅
             return singleTopicSubscribeAsync(conf, schema, interceptors);
         } else {
+            //多 Topic 订阅
             return multiTopicSubscribeAsync(conf, schema, interceptors);
         }
     }
@@ -384,9 +402,11 @@ public class PulsarClientImpl implements PulsarClient {
 
             ConsumerBase<T> consumer;
             if (metadata.partitions > 0) {
+                //这里注意，多分区 Topic 也对应着多 Topic 消费者实现 ？？？
                 consumer = MultiTopicsConsumerImpl.createPartitionedConsumer(PulsarClientImpl.this, conf,
                         externalExecutorProvider, consumerSubscribedFuture, metadata.partitions, schema, interceptors);
             } else {
+                //单 Topic 消费者实现
                 int partitionIndex = TopicName.getPartitionIndex(topic);
                 consumer = ConsumerImpl.newConsumerImpl(PulsarClientImpl.this, topic, conf, externalExecutorProvider,
                         partitionIndex, false, consumerSubscribedFuture, null, schema, interceptors,
@@ -403,6 +423,7 @@ public class PulsarClientImpl implements PulsarClient {
         return consumerSubscribedFuture;
     }
 
+    // 多 Topic 订阅，这里是真正的多 Topic 订阅，但可能其中0或多个 Topic 是多分区
     private <T> CompletableFuture<Consumer<T>> multiTopicSubscribeAsync(ConsumerConfigurationData<T> conf, Schema<T> schema, ConsumerInterceptors<T> interceptors) {
         CompletableFuture<Consumer<T>> consumerSubscribedFuture = new CompletableFuture<>();
 
@@ -419,14 +440,17 @@ public class PulsarClientImpl implements PulsarClient {
         return patternTopicSubscribeAsync(conf, Schema.BYTES, null);
     }
 
+    //Topic 正则表达式订阅
     private <T> CompletableFuture<Consumer<T>> patternTopicSubscribeAsync(ConsumerConfigurationData<T> conf,
             Schema<T> schema, ConsumerInterceptors<T> interceptors) {
         String regex = conf.getTopicsPattern().pattern();
         Mode subscriptionMode = convertRegexSubscriptionMode(conf.getRegexSubscriptionMode());
         TopicName destination = TopicName.get(regex);
+        //有正则表达式解析出 Namespace ，例如：persistent://public/default/.*
         NamespaceName namespaceName = destination.getNamespaceObject();
 
         CompletableFuture<Consumer<T>> consumerSubscribedFuture = new CompletableFuture<>();
+        //根据 Namespace 和 订阅模式来查找所有符合条件的 Topic
         lookup.getTopicsUnderNamespace(namespaceName, subscriptionMode)
             .thenAccept(topics -> {
                 if (log.isDebugEnabled()) {
@@ -435,7 +459,9 @@ public class PulsarClientImpl implements PulsarClient {
                         log.debug("Get topics under namespace {}, topic: {}", namespaceName.toString(), topicName));
                 }
 
+                //这里进行正则表达式过滤
                 List<String> topicsList = topicsPatternFilter(topics, conf.getTopicsPattern());
+                //配置好新的 Topic
                 conf.getTopicNames().addAll(topicsList);
                 ConsumerBase<T> consumer = new PatternMultiTopicsConsumerImpl<T>(conf.getTopicsPattern(),
                     PulsarClientImpl.this,
@@ -455,6 +481,7 @@ public class PulsarClientImpl implements PulsarClient {
         return consumerSubscribedFuture;
     }
 
+    // 从原Topic列表中匹配 ‘Topic正则表达式’，结果返回仅仅是 Topic 名，无分区部分
     // get topics that match 'topicsPattern' from original topics list
     // return result should contain only topic names, without partition part
     public static List<String> topicsPatternFilter(List<String> original, Pattern topicsPattern) {
@@ -556,6 +583,7 @@ public class PulsarClientImpl implements PulsarClient {
         return lookup.getSchema(topicName);
     }
 
+    //同步关闭，实际上就是调用异步关闭方法，等待完成
     @Override
     public void close() throws PulsarClientException {
         try {
@@ -573,9 +601,11 @@ public class PulsarClientImpl implements PulsarClient {
         }
     }
 
+    //异步关闭
     @Override
     public CompletableFuture<Void> closeAsync() {
         log.info("Client closing. URL: {}", lookup.getServiceUrl());
+        //校验状态，如果不是Open状态，抛异常
         if (!state.compareAndSet(State.Open, State.Closing)) {
             return FutureUtil.failedFuture(new PulsarClientException.AlreadyClosedException("Client already closed"));
         }
@@ -583,6 +613,7 @@ public class PulsarClientImpl implements PulsarClient {
         final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
         List<CompletableFuture<Void>> futures = Lists.newArrayList();
 
+        //依次（异步）关闭生产者、消费者
         producers.forEach(p -> futures.add(p.closeAsync()));
         consumers.forEach(c -> futures.add(c.closeAsync()));
 
@@ -590,6 +621,7 @@ public class PulsarClientImpl implements PulsarClient {
         // If there are consumers or producers that need to be shutdown we cannot use the same thread
         // to shutdown the EventLoopGroup as well as that would be trying to shutdown itself thus a deadlock
         // would happen
+        //等待所有的生产者消费者正常关闭，这样就优雅的关闭客户端了
         FutureUtil.waitForAll(futures).thenRun(() -> new Thread(() -> {
             // All producers & consumers are now closed, we can stop the client safely
             try {
@@ -610,13 +642,18 @@ public class PulsarClientImpl implements PulsarClient {
     @Override
     public void shutdown() throws PulsarClientException {
         try {
+            //关闭查找
             lookup.close();
+            //关闭连接池
             cnxPool.close();
+            //定时器关闭
             if (needStopTimer) {
                 timer.stop();
             }
+            //额外执行线程池关闭
             externalExecutorProvider.shutdownNow();
             internalExecutorService.shutdownNow();
+            //认证服务关闭
             conf.getAuthentication().close();
         } catch (Throwable t) {
             log.warn("Failed to shutdown Pulsar client", t);
@@ -640,7 +677,10 @@ public class PulsarClientImpl implements PulsarClient {
     }
 
     protected CompletableFuture<ClientCnx> getConnection(final String topic) {
+        //解析Topic
         TopicName topicName = TopicName.get(topic);
+
+        //从查找服务里读取存活的broker 地址，异步返回 ClientCnx ，根据成功与失败回调 Connection 接口中2个方法。
         return lookup.getBroker(topicName)
                 .thenCompose(pair -> cnxPool.getConnection(pair.getLeft(), pair.getRight()));
     }

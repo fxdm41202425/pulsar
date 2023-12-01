@@ -574,6 +574,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         messageDeduplication.producerRemoved(producer.getProducerName());
     }
 
+    //开始订阅
     @Override
     public CompletableFuture<Consumer> subscribe(final TransportCnx cnx, String subscriptionName, long consumerId,
             SubType subType, int priorityLevel, String consumerName, boolean isDurable, MessageId startMessageId,
@@ -583,12 +584,14 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         final CompletableFuture<Consumer> future = new CompletableFuture<>();
 
         try {
+            // 检查 Topic 是不是当前 broker 所服务的。
             brokerService.checkTopicNsOwnership(getName());
         } catch (Exception e) {
             future.completeExceptionally(e);
             return future;
         }
 
+        // 读压缩特性仅仅允许在独占或故障转移订阅模式
         if (readCompacted && !(subType == SubType.Failover || subType == SubType.Exclusive)) {
             future.completeExceptionally(
                     new NotAllowedException("readCompacted only allowed on failover or exclusive subscriptions"));
@@ -610,6 +613,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             );
             return future;
         }
+
+        // 订阅名不能为空
         if (isBlank(subscriptionName)) {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] Empty subscription name", topic);
@@ -618,6 +623,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             return future;
         }
 
+        // 消费者不支持批量消息
         if (hasBatchMessagePublished && !cnx.isBatchMessageCompatibleVersion()) {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] Consumer doesn't support batch-message {}", topic, subscriptionName);
@@ -626,15 +632,18 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             return future;
         }
 
+        // 不能订阅保留订阅名（即订阅名不能带有副本前缀 或者 去重名 pulsar.dedup）
         if (subscriptionName.startsWith(replicatorPrefix) || subscriptionName.equals(DEDUPLICATION_CURSOR_NAME)) {
             log.warn("[{}] Failed to create subscription for {}", topic, subscriptionName);
             future.completeExceptionally(new NamingException("Subscription with reserved subscription name attempted"));
             return future;
         }
 
+        // 订阅限制速率（主机名或IP，消费者名，消费者ID）
         if (cnx.clientAddress() != null && cnx.clientAddress().toString().contains(":")) {
             SubscribeRateLimiter.ConsumerIdentifier consumer = new SubscribeRateLimiter.ConsumerIdentifier(
                     cnx.clientAddress().toString().split(":")[0], consumerName, consumerId);
+            // 如果订阅限速器不为空，并且订阅限制列表有指定消费者或消费许可已达上限  或 无法获取许可，则不允许订阅
             if (subscribeRateLimiter.isPresent() && !subscribeRateLimiter.get().subscribeAvailable(consumer) || !subscribeRateLimiter.get().tryAcquire(consumer)) {
                 log.warn("[{}] Failed to create subscription for {} {} limited by {}, available {}",
                         topic, subscriptionName, consumer, subscribeRateLimiter.get().getSubscribeRate(),
@@ -647,11 +656,14 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
         lock.readLock().lock();
         try {
+            //Topic 是否已关闭或被删除
             if (isFenced) {
                 log.warn("[{}] Attempting to subscribe to a fenced topic", topic);
                 future.completeExceptionally(new TopicFencedException("Topic is temporarily unavailable"));
                 return future;
             }
+
+            // 递增消费者引用计数
             USAGE_COUNT_UPDATER.incrementAndGet(this);
             if (log.isDebugEnabled()) {
                 log.debug("[{}] [{}] [{}] Added consumer -- count: {}", topic, subscriptionName, consumerName,
@@ -661,10 +673,12 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             lock.readLock().unlock();
         }
 
+        // 这里区分持久化游标和非持久化游标，当 isDurable 为 true时，为持久化游标
         CompletableFuture<? extends Subscription> subscriptionFuture = isDurable ? //
                 getDurableSubscription(subscriptionName, initialPosition, startMessageRollbackDurationSec, replicatedSubscriptionState) //
                 : getNonDurableSubscription(subscriptionName, startMessageId, initialPosition, startMessageRollbackDurationSec, readCompacted);
 
+        // 如果为持久化，确定最大未确认消息，否则为0
         int maxUnackedMessages = isDurable
                 ? getMaxUnackedMessagesOnConsumer()
                 : 0;
@@ -745,6 +759,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
         Map<String, Long> properties = PersistentSubscription.getBaseCursorProperties(replicated);
 
+        // 打开游标，订阅名经过 URL 编码后，成游标名，起始位置为 initialPostion （也就是说，会从这个位置开始推送消息）
         ledger.asyncOpenCursor(Codec.encode(subscriptionName), initialPosition, properties, new OpenCursorCallback() {
             @Override
             public void openCursorComplete(ManagedCursor cursor, Object ctx) {

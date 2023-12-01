@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.apache.pulsar.broker.lookup;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -80,7 +81,8 @@ public class TopicLookupBase extends PulsarWebResource {
         }
 
         CompletableFuture<Optional<LookupResult>> lookupFuture = pulsar().getNamespaceService()
-                .getBrokerServiceUrlAsync(topicName, LookupOptions.builder().authoritative(authoritative).loadTopicsInBundle(false).build());
+                .getBrokerServiceUrlAsync(topicName,
+                        LookupOptions.builder().authoritative(authoritative).loadTopicsInBundle(false).build());
 
         lookupFuture.thenAccept(optionalResult -> {
             if (optionalResult == null || !optionalResult.isPresent()) {
@@ -166,9 +168,11 @@ public class TopicLookupBase extends PulsarWebResource {
      * @param advertisedListenerName
      * @return
      */
+    // 通过 Topic 名查找所属的存活的 broker 地址
     public static CompletableFuture<ByteBuf> lookupTopicAsync(PulsarService pulsarService, TopicName topicName,
                                                               boolean authoritative, String clientAppId,
-                                                              AuthenticationDataSource authenticationData, long requestId,
+                                                              AuthenticationDataSource authenticationData,
+                                                              long requestId,
                                                               final String advertisedListenerName,
                                                               boolean isAlreadyAuthorized) {
 
@@ -177,18 +181,22 @@ public class TopicLookupBase extends PulsarWebResource {
         final String cluster = topicName.getCluster();
 
         // (1) validate cluster
+        // (1) 验证集群信息
         getClusterDataIfDifferentCluster(pulsarService, cluster, clientAppId).thenAccept(differentClusterData -> {
-
+            // 如果 Topic 不属于当前 broker，则告诉客户端执行重定向命令
             if (differentClusterData != null) {
                 if (log.isDebugEnabled()) {
                     log.debug("[{}] Redirecting the lookup call to {}/{} cluster={}", clientAppId,
                             differentClusterData.getBrokerServiceUrl(), differentClusterData.getBrokerServiceUrlTls(),
                             cluster);
                 }
+
+                //表示要重定向
                 validationFuture.complete(newLookupResponse(differentClusterData.getBrokerServiceUrl(),
                         differentClusterData.getBrokerServiceUrlTls(), true, LookupType.Redirect, requestId, false));
             } else {
                 // (2) authorize client
+                // (2) 客户端授权
                 try {
                     if (!isAlreadyAuthorized) {
                         checkAuthorization(pulsarService, topicName, clientAppId, authenticationData);
@@ -204,30 +212,35 @@ public class TopicLookupBase extends PulsarWebResource {
                     return;
                 }
                 // (3) validate global namespace
+                // (3) 验证全局 Namespace ，上一小节以有分析，这里不再赘述
                 checkLocalOrGetPeerReplicationCluster(pulsarService, topicName.getNamespaceObject())
                         .thenAccept(peerClusterData -> {
                             if (peerClusterData == null) {
                                 // (4) all validation passed: initiate lookup
+                                // (4) 所有校验已通过，初始化 lookup
                                 validationFuture.complete(null);
                                 return;
                             }
                             // if peer-cluster-data is present it means namespace is owned by that peer-cluster and
                             // request should be redirect to the peer-cluster
+                            // 如果存在对等集群数据，则表示该对等集群拥有 namespace，并且请求应重定向到该对等集群
                             if (StringUtils.isBlank(peerClusterData.getBrokerServiceUrl())
                                     && StringUtils.isBlank(peerClusterData.getBrokerServiceUrlTls())) {
                                 validationFuture.complete(newLookupErrorResponse(ServerError.MetadataError,
                                         "Redirected cluster's brokerService url is not configured", requestId));
                                 return;
                             }
+
+                            // 找到 topic 实际所在的 broker 服务地址，发送重定向命令
                             validationFuture.complete(newLookupResponse(peerClusterData.getBrokerServiceUrl(),
                                     peerClusterData.getBrokerServiceUrlTls(), true, LookupType.Redirect, requestId,
                                     false));
 
                         }).exceptionally(ex -> {
-                    validationFuture.complete(
-                            newLookupErrorResponse(ServerError.MetadataError, ex.getMessage(), requestId));
-                    return null;
-                });
+                            validationFuture.complete(
+                                    newLookupErrorResponse(ServerError.MetadataError, ex.getMessage(), requestId));
+                            return null;
+                        });
             }
         }).exceptionally(ex -> {
             validationFuture.completeExceptionally(ex);
@@ -235,7 +248,9 @@ public class TopicLookupBase extends PulsarWebResource {
         });
 
         // Initiate lookup once validation completes
+        // 一旦初始化 lookup 命令，验证完成
         validationFuture.thenAccept(validationFailureResponse -> {
+            //如果验证通过有数据（即重定向命令或错误信息），则直接返回
             if (validationFailureResponse != null) {
                 lookupfuture.complete(validationFailureResponse);
             } else {
@@ -244,6 +259,7 @@ public class TopicLookupBase extends PulsarWebResource {
                         .advertisedListenerName(advertisedListenerName)
                         .loadTopicsInBundle(true)
                         .build();
+                //走到这里表示前面调用并没有查到到数据
                 pulsarService.getNamespaceService().getBrokerServiceUrlAsync(topicName, options)
                         .thenAccept(lookupResult -> {
 
@@ -251,6 +267,7 @@ public class TopicLookupBase extends PulsarWebResource {
                                 log.debug("[{}] Lookup result {}", topicName.toString(), lookupResult);
                             }
 
+                            // 如果这里还是查询结果无数据，则表示当前无 broker 可用
                             if (!lookupResult.isPresent()) {
                                 lookupfuture.complete(newLookupErrorResponse(ServerError.ServiceNotReady,
                                         "No broker was available to own " + topicName, requestId));
@@ -258,6 +275,7 @@ public class TopicLookupBase extends PulsarWebResource {
                             }
 
                             LookupData lookupData = lookupResult.get().getLookupData();
+                            // 如果要重定向，则判定下是否要授权（如果是领导者，则需要）
                             if (lookupResult.get().isRedirect()) {
                                 boolean newAuthoritative = lookupResult.get().isAuthoritativeRedirect();
                                 lookupfuture.complete(
@@ -266,6 +284,7 @@ public class TopicLookupBase extends PulsarWebResource {
                             } else {
                                 // When running in standalone mode we want to redirect the client through the service
                                 // url, so that the advertised address configuration is not relevant anymore.
+                                // 在单机模式下运行时，我们希望通过服务URL重定向客户端，以便通知的地址配置不再相关。
                                 boolean redirectThroughServiceUrl = pulsarService.getConfiguration()
                                         .isRunningStandalone();
 
@@ -274,17 +293,19 @@ public class TopicLookupBase extends PulsarWebResource {
                                         requestId, redirectThroughServiceUrl));
                             }
                         }).exceptionally(ex -> {
-                    if (ex instanceof CompletionException && ex.getCause() instanceof IllegalStateException) {
-                        log.info("Failed to lookup {} for topic {} with error {}", clientAppId,
-                                topicName.toString(), ex.getCause().getMessage());
-                    } else {
-                        log.warn("Failed to lookup {} for topic {} with error {}", clientAppId,
-                                topicName.toString(), ex.getMessage(), ex);
-                    }
-                    lookupfuture.complete(
-                            newLookupErrorResponse(ServerError.ServiceNotReady, ex.getMessage(), requestId));
-                    return null;
-                });
+                            if (ex instanceof CompletionException && ex.getCause() instanceof IllegalStateException) {
+                                log.info("Failed to lookup {} for topic {} with error {}", clientAppId,
+                                        topicName.toString(), ex.getCause().getMessage());
+                            } else {
+                                log.warn("Failed to lookup {} for topic {} with error {}", clientAppId,
+                                        topicName.toString(), ex.getMessage(), ex);
+                            }
+
+                            //服务暂不可用
+                            lookupfuture.complete(
+                                    newLookupErrorResponse(ServerError.ServiceNotReady, ex.getMessage(), requestId));
+                            return null;
+                        });
             }
 
         }).exceptionally(ex -> {
@@ -296,6 +317,7 @@ public class TopicLookupBase extends PulsarWebResource {
                         ex.getMessage(), ex);
             }
 
+            //服务暂不可用
             lookupfuture.complete(newLookupErrorResponse(ServerError.ServiceNotReady, ex.getMessage(), requestId));
             return null;
         });
@@ -314,13 +336,13 @@ public class TopicLookupBase extends PulsarWebResource {
     }
 
     protected TopicName getTopicName(String topicDomain, String tenant, String cluster, String namespace,
-            @Encoded String encodedTopic) {
+                                     @Encoded String encodedTopic) {
         String decodedName = Codec.decode(encodedTopic);
         return TopicName.get(TopicDomain.getEnum(topicDomain).value(), tenant, cluster, namespace, decodedName);
     }
 
     protected TopicName getTopicName(String topicDomain, String tenant, String namespace,
-            @Encoded String encodedTopic) {
+                                     @Encoded String encodedTopic) {
         String decodedName = Codec.decode(encodedTopic);
         return TopicName.get(TopicDomain.getEnum(topicDomain).value(), tenant, namespace, decodedName);
     }

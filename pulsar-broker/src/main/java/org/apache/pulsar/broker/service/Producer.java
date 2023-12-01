@@ -173,6 +173,7 @@ public class Producer {
             return false;
         }
 
+        // 消息校验校验和，如果失败，则直接发送错误信息
         if (!verifyChecksum(headersAndPayload)) {
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, sequenceId, ServerError.ChecksumError, "Checksum failed on the broker");
@@ -200,6 +201,7 @@ public class Producer {
             }
         }
 
+        // 增加正应答数计数
         startPublishOperation((int) batchSize, headersAndPayload.readableBytes());
         return true;
     }

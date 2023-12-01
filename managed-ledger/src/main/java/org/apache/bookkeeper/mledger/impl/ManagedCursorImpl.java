@@ -2654,6 +2654,7 @@ public class ManagedCursorImpl implements ManagedCursor {
      *
      * @return Whether the cursor responded to the notification
      */
+    // 通知游标消息到来
     void notifyEntriesAvailable() {
         if (log.isDebugEnabled()) {
             log.debug("[{}] [{}] Received ml notification", ledger.getName(), name);

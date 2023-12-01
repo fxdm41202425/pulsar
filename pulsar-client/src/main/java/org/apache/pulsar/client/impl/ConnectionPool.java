@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -16,9 +16,11 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.apache.pulsar.client.impl;
 
 import static org.apache.pulsar.common.util.netty.ChannelFutures.toCompletableFuture;
+
 import com.google.common.annotations.VisibleForTesting;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
@@ -29,6 +31,7 @@ import io.netty.resolver.AddressResolver;
 import io.netty.resolver.dns.DnsAddressResolverGroup;
 import io.netty.resolver.dns.DnsNameResolverBuilder;
 import io.netty.util.concurrent.Future;
+
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -41,6 +44,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Supplier;
+
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.InvalidServiceURL;
@@ -53,12 +57,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class ConnectionPool implements AutoCloseable {
+
+    ////核心容器，用于存客户端与broker或proxy的连接
     protected final ConcurrentHashMap<InetSocketAddress, ConcurrentMap<Integer, CompletableFuture<ClientCnx>>> pool;
 
     private final Bootstrap bootstrap;
     private final PulsarChannelInitializer channelInitializerHandler;
     private final ClientConfigurationData clientConfig;
     private final EventLoopGroup eventLoopGroup;
+
+    //每个主机最大连接
     private final int maxConnectionsPerHosts;
     private final boolean isSniProxy;
 
@@ -152,39 +160,48 @@ public class ConnectionPool implements AutoCloseable {
      * These two addresses can be different when the client is forced to connect through a proxy layer. Essentially, the
      * pool is using the logical address as a way to decide whether to reuse a particular connection.
      *
-     * @param logicalAddress
-     *            the address to use as the broker tag
-     * @param physicalAddress
-     *            the real address where the TCP connection should be made
+     * @param logicalAddress  the address to use as the broker tag
+     * @param physicalAddress the real address where the TCP connection should be made
      * @return a future that will produce the ClientCnx object
      */
+    /*从连接池获取连接,这连接可能是从连接池里获取，或者是直接创建
+        关于两个地址的原因，当没有代理层时，2个地址是相同的，其实第一个地址作为broker 的标记，第二个地址去连接，当有代理层时，
+        两个地址不一样的，实际上，连接池使用logicalAddress作为决定是否重用特定连接。*/
     public CompletableFuture<ClientCnx> getConnection(InetSocketAddress logicalAddress,
-            InetSocketAddress physicalAddress) {
+                                                      InetSocketAddress physicalAddress) {
+
+        //如果每个主机最大连接数为0，则禁用连接池，直接创建连接
         if (maxConnectionsPerHosts == 0) {
             // Disable pooling
             return createConnection(logicalAddress, physicalAddress, -1);
         }
 
+        //如果不为0，则产生一个随机数，maxConnectionsPerHosts取余，生成一个randomKey
         final int randomKey = signSafeMod(random.nextInt(), maxConnectionsPerHosts);
 
+        // 连接池里如果logicalAddress作为key，没有对应的value，
+        // 则创建新ConcurrentMap<Integer, CompletableFuture<ClientCnx>对象，如果randomKey作为key，
+        // 没有对应的value，则使用createConnection(logicalAddress, physicalAddress, randomKey)方法创建一个CompletableFuture<ClientCnx>
         return pool.computeIfAbsent(logicalAddress, a -> new ConcurrentHashMap<>()) //
                 .computeIfAbsent(randomKey, k -> createConnection(logicalAddress, physicalAddress, randomKey));
     }
 
     private CompletableFuture<ClientCnx> createConnection(InetSocketAddress logicalAddress,
-            InetSocketAddress physicalAddress, int connectionKey) {
+                                                          InetSocketAddress physicalAddress, int connectionKey) {
         if (log.isDebugEnabled()) {
             log.debug("Connection for {} not found in cache", logicalAddress);
         }
 
         final CompletableFuture<ClientCnx> cnxFuture = new CompletableFuture<ClientCnx>();
 
+        // DNS解析主机名，返回IP数组，以此连接IP，只要一连接成功就返回，否则继续重试下一IP，如果所有IP重试完，还是没连接上，则抛异常
         // Trigger async connect to broker
         createConnection(physicalAddress).thenAccept(channel -> {
             log.info("[{}] Connected to server", channel);
 
             channel.closeFuture().addListener(v -> {
                 // Remove connection from pool when it gets closed
+                // 如果连接关闭，则清理垃圾（主要是从ConnectionPool里移除对应的对象）
                 if (log.isDebugEnabled()) {
                     log.debug("Removing closed connection from pool: {}", v);
                 }
@@ -193,6 +210,7 @@ public class ConnectionPool implements AutoCloseable {
 
             // We are connected to broker, but need to wait until the connect/connected handshake is
             // complete
+            // 这里已经连接上broker，但是需要等待直到连接握手完成
             final ClientCnx cnx = (ClientCnx) channel.pipeline().get("handler");
             if (!channel.isActive() || cnx == null) {
                 if (log.isDebugEnabled()) {
@@ -207,11 +225,16 @@ public class ConnectionPool implements AutoCloseable {
                 // it can be specified when sending the CommandConnect.
                 // That phase will happen in the ClientCnx.connectionActive() which will be invoked immediately after
                 // this method.
+
+                // 当正在通过代理连接时，需要在ClientCnx对象中设置目标broker，这为了在发送CommandConnect命令时指定目标broker。
+                // 在阶段发生在CliectCnx.connectActive()里，在完成本方法调用后，将会立即调用CliectCnx.connectActive()
                 cnx.setTargetBroker(logicalAddress);
             }
 
+            //保存远程主机名，主要在处理握手包时，TLS校验主机名是否正确
             cnx.setRemoteHostName(physicalAddress.getHostName());
 
+            //这里就是等待与broker握手完成
             cnx.connectionFuture().thenRun(() -> {
                 if (log.isDebugEnabled()) {
                     log.debug("[{}] Connection handshake completed", cnx.channel());
@@ -242,6 +265,8 @@ public class ConnectionPool implements AutoCloseable {
     private CompletableFuture<Channel> createConnection(InetSocketAddress unresolvedAddress) {
         CompletableFuture<List<InetSocketAddress>> resolvedAddress;
         try {
+
+            // DNS解析出IP列表--> 以此尝试连接IP，只要有成功的就返回
             if (isSniProxy) {
                 URI proxyURI = new URI(clientConfig.getProxyServiceUrl());
                 resolvedAddress =
@@ -263,14 +288,18 @@ public class ConnectionPool implements AutoCloseable {
      * Try to connect to a sequence of IP addresses until a successful connection can be made, or fail if no
      * address is working.
      */
+    //连接解析出的IP
     private CompletableFuture<Channel> connectToResolvedAddresses(Iterator<InetSocketAddress> unresolvedAddresses,
                                                                   InetSocketAddress sniHost) {
         CompletableFuture<Channel> future = new CompletableFuture<>();
 
         // Successfully connected to server
         connectToAddress(unresolvedAddresses.next(), sniHost)
+                // 这里成功连接到服务器上
                 .thenAccept(future::complete)
                 .exceptionally(exception -> {
+                    //连接异常，切换尝试切换下一IP
+                    //判定迭代器是否还有IP地址
                     if (unresolvedAddresses.hasNext()) {
                         // Try next IP address
                         connectToResolvedAddresses(unresolvedAddresses, sniHost).thenAccept(future::complete)
@@ -281,6 +310,7 @@ public class ConnectionPool implements AutoCloseable {
                                 });
                     } else {
                         // Failed to connect to any IP address
+                        // 这里表示没有IP地址了，这返回连接抛出的异常
                         future.completeExceptionally(exception);
                     }
                     return null;
@@ -289,6 +319,7 @@ public class ConnectionPool implements AutoCloseable {
         return future;
     }
 
+    //DNS解析IP列表
     CompletableFuture<List<InetSocketAddress>> resolveName(InetSocketAddress unresolvedAddress) {
         CompletableFuture<List<InetSocketAddress>> future = new CompletableFuture<>();
         addressResolver.resolveAll(unresolvedAddress).addListener((Future<List<InetSocketAddress>> resolveFuture) -> {
@@ -304,6 +335,7 @@ public class ConnectionPool implements AutoCloseable {
     /**
      * Attempt to establish a TCP connection to an already resolved single IP address.
      */
+    //业务最底层调用，连接远程主机，当然，在建立连接过程中，将会触发通道激活方法
     private CompletableFuture<Channel> connectToAddress(InetSocketAddress remoteAddress, InetSocketAddress sniHost) {
         if (clientConfig.isUseTls()) {
             return toCompletableFuture(bootstrap.register())
@@ -336,7 +368,7 @@ public class ConnectionPool implements AutoCloseable {
     }
 
     private void cleanupConnection(InetSocketAddress address, int connectionKey,
-            CompletableFuture<ClientCnx> connectionFuture) {
+                                   CompletableFuture<ClientCnx> connectionFuture) {
         ConcurrentMap<Integer, CompletableFuture<ClientCnx>> map = pool.get(address);
         if (map != null) {
             map.remove(connectionKey, connectionFuture);

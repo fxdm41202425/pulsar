@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.apache.pulsar;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -24,9 +25,11 @@ import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.pulsar.common.configuration.PulsarConfigurationLoader.create;
 import static org.apache.pulsar.common.configuration.PulsarConfigurationLoader.isComplete;
+
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.google.common.annotations.VisibleForTesting;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.net.MalformedURLException;
@@ -36,6 +39,7 @@ import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.Optional;
+
 import org.apache.bookkeeper.common.util.ReflectionUtils;
 import org.apache.bookkeeper.conf.ServerConfiguration;
 import org.apache.bookkeeper.discover.BookieServiceInfo;
@@ -76,17 +80,20 @@ public class PulsarBrokerStarter {
         @Parameter(names = {"-rb", "--run-bookie"}, description = "Run Bookie together with Broker")
         private boolean runBookie = false;
 
-        @Parameter(names = {"-ra", "--run-bookie-autorecovery"}, description = "Run Bookie Autorecovery together with broker")
+        @Parameter(names = {"-ra",
+                "--run-bookie-autorecovery"}, description = "Run Bookie Autorecovery together with broker")
         private boolean runBookieAutoRecovery = false;
 
         @Parameter(names = {"-bc", "--bookie-conf"}, description = "Configuration file for Bookie")
-        private String bookieConfigFile = Paths.get("").toAbsolutePath().normalize().toString() + "/conf/bookkeeper.conf";
+        private String bookieConfigFile =
+                Paths.get("").toAbsolutePath().normalize().toString() + "/conf/bookkeeper.conf";
 
         @Parameter(names = {"-rfw", "--run-functions-worker"}, description = "Run functions worker with Broker")
         private boolean runFunctionsWorker = false;
 
         @Parameter(names = {"-fwc", "--functions-worker-conf"}, description = "Configuration file for Functions Worker")
-        private String fnWorkerConfigFile = Paths.get("").toAbsolutePath().normalize().toString() + "/conf/functions_worker.yml";
+        private String fnWorkerConfigFile =
+                Paths.get("").toAbsolutePath().normalize().toString() + "/conf/functions_worker.yml";
 
         @Parameter(names = {"-h", "--help"}, description = "Show this help message")
         private boolean help = false;
@@ -108,7 +115,7 @@ public class PulsarBrokerStarter {
 
         if (bookieConf.getMaxPendingReadRequestPerThread() < bookieConf.getRereplicationEntryBatchSize()) {
             throw new IllegalArgumentException(
-                "rereplicationEntryBatchSize should be smaller than " + "maxPendingReadRequestPerThread");
+                    "rereplicationEntryBatchSize should be smaller than " + "maxPendingReadRequestPerThread");
         }
         return bookieConf;
     }
@@ -118,15 +125,23 @@ public class PulsarBrokerStarter {
     }
 
     private static class BrokerStarter {
+        //broker服务配置文件类
         private final ServiceConfiguration brokerConfig;
+        //pulsar服务类
         private final PulsarService pulsarService;
+        //bookkeeper客户端
         private final BookieServer bookieServer;
+        //bookkeeper自动恢复服务
         private final AutoRecoveryMain autoRecoveryMain;
+        //bookkeeper状态提供服务
         private final StatsProvider bookieStatsProvider;
+        //bookkeeper服务器配置
         private final ServerConfiguration bookieConfig;
+        //函数式工作者服务
         private final WorkerService functionsWorkerService;
 
-        BrokerStarter(String[] args) throws Exception{
+        BrokerStarter(String[] args) throws Exception {
+            //命令行参数解析
             StarterArguments starterArguments = new StarterArguments();
             JCommander jcommander = new JCommander(starterArguments);
             jcommander.setProgramName("PulsarBrokerStarter");
@@ -143,6 +158,7 @@ public class PulsarBrokerStarter {
                 jcommander.usage();
                 throw new IllegalArgumentException("Need to specify a configuration file for broker");
             } else {
+                //TODO 加载配置文件，可以学习一下
                 brokerConfig = loadConfig(starterArguments.brokerConfigFile);
             }
 
@@ -151,13 +167,17 @@ public class PulsarBrokerStarter {
                 throw new IllegalArgumentException("Max message size need smaller than jvm directMemory");
             }
 
-            if (!NamespaceBundleSplitAlgorithm.availableAlgorithms.containsAll(brokerConfig.getSupportedNamespaceBundleSplitAlgorithms())) {
-                throw new IllegalArgumentException("The given supported namespace bundle split algorithm has unavailable algorithm. " +
-                    "Available algorithms are " + NamespaceBundleSplitAlgorithm.availableAlgorithms);
+            if (!NamespaceBundleSplitAlgorithm.availableAlgorithms.containsAll(
+                    brokerConfig.getSupportedNamespaceBundleSplitAlgorithms())) {
+                throw new IllegalArgumentException(
+                        "The given supported namespace bundle split algorithm has unavailable algorithm. " +
+                                "Available algorithms are " + NamespaceBundleSplitAlgorithm.availableAlgorithms);
             }
 
-            if (!brokerConfig.getSupportedNamespaceBundleSplitAlgorithms().contains(brokerConfig.getDefaultNamespaceBundleSplitAlgorithm())) {
-                throw new IllegalArgumentException("Supported namespace bundle split algorithms must contains the default namespace bundle split algorithm");
+            if (!brokerConfig.getSupportedNamespaceBundleSplitAlgorithms()
+                    .contains(brokerConfig.getDefaultNamespaceBundleSplitAlgorithm())) {
+                throw new IllegalArgumentException(
+                        "Supported namespace bundle split algorithms must contains the default namespace bundle split algorithm");
             }
 
             // init functions worker
@@ -169,18 +189,18 @@ public class PulsarBrokerStarter {
                     workerConfig = WorkerConfig.load(starterArguments.fnWorkerConfigFile);
                 }
                 brokerConfig.getWebServicePort()
-                    .map(port -> workerConfig.setWorkerPort(port));
+                        .map(port -> workerConfig.setWorkerPort(port));
                 brokerConfig.getWebServicePortTls()
-                    .map(port -> workerConfig.setWorkerPortTls(port));
+                        .map(port -> workerConfig.setWorkerPortTls(port));
                 // worker talks to local broker
                 String hostname = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(
-                    brokerConfig.getAdvertisedAddress());
+                        brokerConfig.getAdvertisedAddress());
                 workerConfig.setWorkerHostname(hostname);
                 workerConfig.setWorkerPort(brokerConfig.getWebServicePort().get());
                 workerConfig.setWorkerId(
-                    "c-" + brokerConfig.getClusterName()
-                        + "-fw-" + hostname
-                        + "-" + workerConfig.getWorkerPort());
+                        "c-" + brokerConfig.getClusterName()
+                                + "-fw-" + hostname
+                                + "-" + workerConfig.getWorkerPort());
                 // inherit broker authorization setting
                 workerConfig.setAuthenticationEnabled(brokerConfig.isAuthenticationEnabled());
                 workerConfig.setAuthenticationProviders(brokerConfig.getAuthenticationProviders());
@@ -197,7 +217,8 @@ public class PulsarBrokerStarter {
 
                 // client in worker will use this config to authenticate with broker
                 workerConfig.setBrokerClientAuthenticationPlugin(brokerConfig.getBrokerClientAuthenticationPlugin());
-                workerConfig.setBrokerClientAuthenticationParameters(brokerConfig.getBrokerClientAuthenticationParameters());
+                workerConfig.setBrokerClientAuthenticationParameters(
+                        brokerConfig.getBrokerClientAuthenticationParameters());
 
                 // inherit super users
                 workerConfig.setSuperUserRoles(brokerConfig.getSuperUserRoles());
@@ -209,27 +230,28 @@ public class PulsarBrokerStarter {
 
             // init pulsar service
             pulsarService = new PulsarService(brokerConfig,
-                                              Optional.ofNullable(functionsWorkerService),
-                                              (exitCode) -> {
-                                                  log.info("Halting broker process with code {}",
-                                                           exitCode);
-                                                  Runtime.getRuntime().halt(exitCode);
-                                              });
+                    Optional.ofNullable(functionsWorkerService),
+                    (exitCode) -> {
+                        log.info("Halting broker process with code {}",
+                                exitCode);
+                        Runtime.getRuntime().halt(exitCode);
+                    });
 
             // if no argument to run bookie in cmd line, read from pulsar config
             if (!argsContains(args, "-rb") && !argsContains(args, "--run-bookie")) {
                 checkState(starterArguments.runBookie == false,
-                    "runBookie should be false if has no argument specified");
+                        "runBookie should be false if has no argument specified");
                 starterArguments.runBookie = brokerConfig.isEnableRunBookieTogether();
             }
             if (!argsContains(args, "-ra") && !argsContains(args, "--run-bookie-autorecovery")) {
                 checkState(starterArguments.runBookieAutoRecovery == false,
-                    "runBookieAutoRecovery should be false if has no argument specified");
+                        "runBookieAutoRecovery should be false if has no argument specified");
                 starterArguments.runBookieAutoRecovery = brokerConfig.isEnableRunBookieAutoRecoveryTogether();
             }
 
+            // TODO 是否启用bookie自动恢复服务 ？？？
             if ((starterArguments.runBookie || starterArguments.runBookieAutoRecovery)
-                && isBlank(starterArguments.bookieConfigFile)) {
+                    && isBlank(starterArguments.bookieConfigFile)) {
                 jcommander.usage();
                 throw new IllegalArgumentException("No configuration file for Bookie");
             }
@@ -237,7 +259,7 @@ public class PulsarBrokerStarter {
             // init stats provider
             if (starterArguments.runBookie || starterArguments.runBookieAutoRecovery) {
                 checkState(isNotBlank(starterArguments.bookieConfigFile),
-                    "No configuration file for Bookie");
+                        "No configuration file for Bookie");
                 bookieConfig = readBookieConfFile(starterArguments.bookieConfigFile);
                 Class<? extends StatsProvider> statsProviderClass = bookieConfig.getStatsProviderClass();
                 bookieStatsProvider = ReflectionUtils.newInstance(statsProviderClass);
@@ -247,15 +269,18 @@ public class PulsarBrokerStarter {
             }
 
             // init bookie server
+            // 如果配置文件设置当前服务器运行 bookie 服务，则初始化 bookie 服务器
             if (starterArguments.runBookie) {
                 checkNotNull(bookieConfig, "No ServerConfiguration for Bookie");
                 checkNotNull(bookieStatsProvider, "No Stats Provider for Bookie");
-                bookieServer = new BookieServer(bookieConfig, bookieStatsProvider.getStatsLogger(""), BookieServiceInfo.NO_INFO);
+                bookieServer = new BookieServer(bookieConfig, bookieStatsProvider.getStatsLogger(""),
+                        BookieServiceInfo.NO_INFO);
             } else {
                 bookieServer = null;
             }
 
             // init bookie AutorecoveryMain
+            // 如果设置 bookie 自动恢复标志，则初始化 bookie 自动恢复服务
             if (starterArguments.runBookieAutoRecovery) {
                 checkNotNull(bookieConfig, "No ServerConfiguration for Bookie Autorecovery");
                 autoRecoveryMain = new AutoRecoveryMain(bookieConfig);
@@ -326,17 +351,22 @@ public class PulsarBrokerStarter {
 
     public static void main(String[] args) throws Exception {
         DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss,SSS");
+
+        //设置线程默认未捕获异常处理流程
         Thread.setDefaultUncaughtExceptionHandler((thread, exception) -> {
-            System.out.println(String.format("%s [%s] error Uncaught exception in thread %s: %s", dateFormat.format(new Date()), thread.getContextClassLoader(), thread.getName(), exception.getMessage()));
+            System.out.println(
+                    String.format("%s [%s] error Uncaught exception in thread %s: %s", dateFormat.format(new Date()),
+                            thread.getContextClassLoader(), thread.getName(), exception.getMessage()));
         });
 
         BrokerStarter starter = new BrokerStarter(args);
         Runtime.getRuntime().addShutdownHook(
-            new Thread(() -> {
-                starter.shutdown();
-            })
+                new Thread(() -> {
+                    starter.shutdown();
+                })
         );
 
+        //TODO 作用待确定
         PulsarByteBufAllocator.registerOOMListener(oomException -> {
             if (starter.brokerConfig.isSkipBrokerShutdownOnOOM()) {
                 log.error("-- Received OOM exception: {}", oomException.getMessage(), oomException);

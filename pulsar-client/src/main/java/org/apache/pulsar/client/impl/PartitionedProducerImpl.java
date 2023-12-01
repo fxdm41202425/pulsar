@@ -57,14 +57,26 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
 
     private static final Logger log = LoggerFactory.getLogger(PartitionedProducerImpl.class);
 
+    //每个分区一个无分区 Producer
     private List<ProducerImpl<T>> producers;
+
+    //消息路由策略
     private MessageRouter routerPolicy;
+
+    //Producer 状态记录器
     private final ProducerStatsRecorderImpl stats;
+
+    //Topic 元数据
     private TopicMetadata topicMetadata;
 
     // timeout related to auto check and subscribe partition increasement
+    //用于超时检查以及订阅分区变更增长消息
     private volatile Timeout partitionsAutoUpdateTimeout = null;
+
+    //Topic 分区变更监听器
     TopicsPartitionChangedListener topicsPartitionChangedListener;
+
+    //分区自动更新future
     CompletableFuture<Void> partitionsAutoUpdateFuture = null;
 
     public PartitionedProducerImpl(PulsarClientImpl client, String topic, ProducerConfigurationData conf, int numPartitions,
@@ -75,11 +87,15 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
         this.routerPolicy = getMessageRouter();
         stats = client.getConfiguration().getStatsIntervalSeconds() > 0 ? new ProducerStatsRecorderImpl() : null;
 
+        //计算每个分区最大正处理消息数
         int maxPendingMessages = Math.min(conf.getMaxPendingMessages(),
                 conf.getMaxPendingMessagesAcrossPartitions() / numPartitions);
         conf.setMaxPendingMessages(maxPendingMessages);
+
+        //每个分区启动一个 无分区 Producer，用于发消息
         start();
 
+        // 启动自动监控 Topic 分区增长任务
         // start track and auto subscribe partition increasement
         if (conf.isAutoUpdatePartitions()) {
             topicsPartitionChangedListener = new TopicsPartitionChangedListener();
@@ -128,11 +144,17 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
     private void start() {
         AtomicReference<Throwable> createFail = new AtomicReference<Throwable>();
         AtomicInteger completed = new AtomicInteger();
+
+        //开始创建分区个数的Producer
         for (int partitionIndex = 0; partitionIndex < topicMetadata.numPartitions(); partitionIndex++) {
+            // 从缓存中获取分区名字
             String partitionName = TopicName.get(topic).getPartition(partitionIndex).toString();
+            //创建无分区Producer
             ProducerImpl<T> producer = new ProducerImpl<>(client, partitionName, conf, new CompletableFuture<>(),
                     partitionIndex, schema, interceptors);
             producers.add(producer);
+
+            //如果创建完成，立即执行
             producer.producerCreatedFuture().handle((prod, createException) -> {
                 if (createException != null) {
                     setState(State.Failed);
@@ -143,6 +165,8 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
                 // due to any
                 // failure in one of the partitions and close the successfully
                 // created partitions
+                //如果所有分区对应的Producer都创建成功，则分区 Producer 才标记为成功，
+                // 否则抛其中一个创建失败的异常，并且要关闭已成功创建的对应分区的 Producer。
                 if (completed.incrementAndGet() == topicMetadata.numPartitions()) {
                     if (createFail.get() == null) {
                         setState(State.Ready);
@@ -185,9 +209,14 @@ public class PartitionedProducerImpl<T> extends ProducerBase<T> {
                 return FutureUtil.failedFuture(new PulsarClientException.NotConnectedException());
         }
 
+        //通过路由策略，选择消息发送到哪个分区
         int partition = routerPolicy.choosePartition(message, topicMetadata);
+
+        //预防性检查分区数落点
         checkArgument(partition >= 0 && partition < topicMetadata.numPartitions(),
                 "Illegal partition index chosen by the message routing policy: " + partition);
+
+        //根据分区索引来获取 Producer ，然后发消息到此无分区 Producer 中，达到增加吞吐量目的
         return producers.get(partition).internalSendWithTxnAsync(message, txn);
     }
 

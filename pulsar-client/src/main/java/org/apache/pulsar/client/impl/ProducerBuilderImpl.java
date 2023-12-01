@@ -86,6 +86,7 @@ public class ProducerBuilderImpl<T> implements ProducerBuilder<T> {
         return new ProducerBuilderImpl<>(client, conf.clone(), schema);
     }
 
+    //同步创建一个生产者
     @Override
     public Producer<T> create() throws PulsarClientException {
         try {
@@ -106,6 +107,8 @@ public class ProducerBuilderImpl<T> implements ProducerBuilder<T> {
         }
 
         try {
+            //设置消息路由模式，有3种
+            //默认为轮询
             setMessageRoutingMode();
         } catch(PulsarClientException pce) {
             return FutureUtil.failedFuture(pce);

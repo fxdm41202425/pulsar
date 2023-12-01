@@ -86,6 +86,7 @@ public class BinaryProtoLookupService implements LookupService {
      * @return broker-socket-address that serves given topic
      */
     public CompletableFuture<Pair<InetSocketAddress, InetSocketAddress>> getBroker(TopicName topicName) {
+        //域名解析到对应的IP地址信息
         return findBroker(serviceNameResolver.resolveHost(), false, topicName, 0);
     }
 
@@ -107,8 +108,10 @@ public class BinaryProtoLookupService implements LookupService {
             return addressFuture;
         }
 
+        //连接池连接目标IP地址
         client.getCnxPool().getConnection(socketAddress).thenAccept(clientCnx -> {
             long requestId = client.newRequestId();
+            //连接成功，发送 Lookup 命令
             ByteBuf request = Commands.newLookup(topicName.toString(), listenerName, authoritative, requestId);
             clientCnx.newLookup(request, requestId).whenComplete((r, t) -> {
                 if (t != null) {
@@ -120,9 +123,11 @@ public class BinaryProtoLookupService implements LookupService {
 
                     addressFuture.completeExceptionally(t);
                 } else {
+                    //成功返回
                     URI uri = null;
                     try {
                         // (1) build response broker-address
+                        // (1) 通过查找应答数据，连接Url
                         if (useTls) {
                             uri = new URI(r.brokerUrlTls);
                         } else {
@@ -133,6 +138,7 @@ public class BinaryProtoLookupService implements LookupService {
                         InetSocketAddress responseBrokerAddress = InetSocketAddress.createUnresolved(uri.getHost(), uri.getPort());
 
                         // (2) redirect to given address if response is: redirect
+                        // (2) 如果查找应答命令需要重定向，则重定向新地址，继续查找 broker 地址
                         if (r.redirect) {
                             findBroker(responseBrokerAddress, r.authoritative, topicName, redirectCount + 1)
                                 .thenAccept(addressFuture::complete).exceptionally((lookupException) -> {
@@ -151,17 +157,21 @@ public class BinaryProtoLookupService implements LookupService {
                             });
                         } else {
                             // (3) received correct broker to connect
+                            // (3) 查看是否通过 proxy 连接
                             if (r.proxyThroughServiceUrl) {
                                 // Connect through proxy
+                                // 通过 proxy 连接
                                 addressFuture.complete(Pair.of(responseBrokerAddress, socketAddress));
                             } else {
                                 // Normal result with direct connection to broker
+                                // 正常情况直连 broker
                                 addressFuture.complete(Pair.of(responseBrokerAddress, responseBrokerAddress));
                             }
                         }
 
                     } catch (Exception parseUrlException) {
                         // Failed to parse url
+                        // url解析失败异常
                         log.warn("[{}] invalid url {} : {}", topicName.toString(), uri, parseUrlException.getMessage(),
                             parseUrlException);
                         addressFuture.completeExceptionally(parseUrlException);
